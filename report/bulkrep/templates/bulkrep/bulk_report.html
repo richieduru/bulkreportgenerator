@@ -1,0 +1,137 @@
+{% extends 'bulkrep/base.html' %}
+
+{% block title %}Bulk Report - Report Generator{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-center align-items-center" style="min-height: 80vh; background: #f7f9fb;">
+    <div class="card shadow-sm border-0" style="max-width: 540px; width: 100%; border-radius: 18px;">
+        <div class="card-header text-white" style="background: #16a34a; border-radius: 18px 18px 0 0;">
+            <h4 class="mb-0 d-flex align-items-center">
+                <span class="d-inline-flex align-items-center justify-content-center rounded-circle bg-white bg-opacity-10 me-2" style="width:32px;height:32px;">
+                    <i class="fa-regular fa-user-group fa-lg"></i>
+                </span>
+                Generate Bulk Reports
+            </h4>
+        </div>
+        <div class="card-body p-4">
+            <form method="post" class="needs-validation" id="bulkReportForm" novalidate enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="mb-4">
+                    <label class="form-label fw-semibold mb-2">Select Report Generation Method</label>
+                    <div class="d-flex gap-2">
+                        <input type="radio" class="btn-check" name="generation_method" id="method_file" value="file" autocomplete="off" checked>
+                        <label class="btn btn-outline-success d-flex align-items-center gap-2 flex-fill" for="method_file" style="font-weight:500;">
+                            <i class="fa-regular fa-upload"></i> Upload Subscriber List
+                        </label>
+                        <input type="radio" class="btn-check" name="generation_method" id="method_all" value="all" autocomplete="off">
+                        <label class="btn btn-outline-success d-flex align-items-center gap-2 flex-fill" for="method_all" style="font-weight:500;">
+                            <i class="fa-regular fa-user-group"></i> All Subscribers
+                        </label>
+                    </div>
+                </div>
+                <div class="mb-4" id="fileUploadSection">
+                    <label for="subscriber_file" class="form-label">Subscriber List File</label>
+                    <input type="file" class="form-control" id="subscriber_file" name="subscriber_file" accept=".csv,.xlsx,.xls">
+                    <div class="form-text">Supported formats: CSV, Excel (.xlsx, .xls)</div>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label fw-semibold mb-2">Report Options</label>
+                    <div class="d-flex gap-4">
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="include_bills" name="include_bills" checked>
+                            <label class="form-check-label" for="include_bills">Include Summary Bills</label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="include_products" name="include_products" checked>
+                            <label class="form-check-label" for="include_products">Include Product Details</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label fw-semibold mb-2">Date Range</label>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="fa-regular fa-calendar"></i></span>
+                                <input type="date" class="form-control" id="start_date" name="start_date" required value="{{ start_date }}">
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="fa-regular fa-calendar"></i></span>
+                                <input type="date" class="form-control" id="end_date" name="end_date" required value="{{ end_date }}">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-grid gap-2 mb-2">
+                    <button type="submit" class="btn btn-success btn-lg fw-semibold" id="bulkGenerateBtn">
+                        <span class="spinner-border spinner-border-sm d-none" id="bulkSpinner" role="status" aria-hidden="true"></span>
+                        <i class="fas fa-file-export me-2" id="bulkExportIcon"></i>Generate Reports
+                    </button>
+                    <a href="{% url 'bulkrep:home' %}" class="btn btn-outline-secondary btn-lg">
+                        <i class="fas fa-arrow-left me-2"></i>Back to Home
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Form validation and spinner fix for bulk report
+    (function () {
+        'use strict'
+        var forms = document.querySelectorAll('.needs-validation')
+        Array.prototype.slice.call(forms).forEach(function (form) {
+            form.addEventListener('submit', function (event) {
+                if (!form.checkValidity()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                } else {
+                    // Show spinner, hide icon
+                    document.getElementById('bulkSpinner').classList.remove('d-none');
+                    document.getElementById('bulkExportIcon').classList.add('d-none');
+                    document.getElementById('bulkGenerateBtn').setAttribute('disabled', 'disabled');
+                }
+                form.classList.add('was-validated');
+            }, false);
+        });
+        // Reset button state on page load and after download
+        function resetButton() {
+            document.getElementById('bulkSpinner').classList.add('d-none');
+            document.getElementById('bulkExportIcon').classList.remove('d-none');
+            document.getElementById('bulkGenerateBtn').removeAttribute('disabled');
+        }
+        // Only reset button state on page load/navigation (not beforeunload)
+        window.addEventListener('pageshow', function(event) {
+            resetButton();
+        });
+    })();
+    // Toggle file upload section based on generation method
+    document.querySelectorAll('input[name="generation_method"]').forEach(function(radio) {
+        radio.addEventListener('change', function() {
+            const fileSection = document.getElementById('fileUploadSection');
+            if (this.value === 'file') {
+                fileSection.style.display = 'block';
+                document.getElementById('subscriber_file').required = true;
+            } else {
+                fileSection.style.display = 'none';
+                document.getElementById('subscriber_file').required = false;
+            }
+        });
+    });
+    // On page load, set file section visibility
+    window.addEventListener('DOMContentLoaded', function() {
+        const checked = document.querySelector('input[name="generation_method"]:checked');
+        const fileSection = document.getElementById('fileUploadSection');
+        if (checked && checked.value === 'file') {
+            fileSection.style.display = 'block';
+        } else {
+            fileSection.style.display = 'none';
+        }
+    });
+</script>
+{% endblock %} 
