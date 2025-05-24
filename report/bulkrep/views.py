@@ -4,7 +4,8 @@ from django.http import HttpResponse, FileResponse
 from django.db.models import Q, Count, Case, When, IntegerField, Sum
 from django.conf import settings
 from django.utils import timezone
-from django.db import connection
+# Remove unused import
+# from django.db import connection
 from .models import Usagereport
 from datetime import date, timedelta, datetime
 import calendar
@@ -74,14 +75,15 @@ def safe_cell_assignment(ws, row, col, value):
     """Helper function to safely assign values to cells, handling merged cells."""
     write_to_cell(ws, row, col, value)
 
-def execute_raw_sql(query, params=None):
-    """
-    Execute a raw SQL query and return the results as a list of dictionaries
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(query, params or ())
-        columns = [col[0] for col in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+# Remove execute_raw_sql function as we're using ORM now
+# def execute_raw_sql(query, params=None):
+#     """
+#     Execute a raw SQL query and return the results as a list of dictionaries
+#     """
+#     with connection.cursor() as cursor:
+#         cursor.execute(query, params or ())
+#         columns = [col[0] for col in cursor.description]
+#         return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 @login_required
 def home(request):
@@ -95,19 +97,18 @@ def home(request):
     else:
         first_day_next_month = date(today.year, today.month + 1, 1)
     
-    # Use raw SQL to fetch distinct subscriber names, similar to VBA script
-    query = """
-        SELECT DISTINCT SubscriberName 
-        FROM usagereport 
-        WHERE DetailsViewedDate >= %s AND DetailsViewedDate < %s
-        ORDER BY SubscriberName
-    """
+    # Use Django ORM to fetch distinct subscriber names
+    start_date = first_day_of_month
+    end_date = first_day_next_month
     
-    start_date_str = first_day_of_month.strftime('%Y-%m-%d')
-    end_date_str = first_day_next_month.strftime('%Y-%m-%d')
-    
-    subscribers_data = execute_raw_sql(query, [start_date_str, end_date_str])
-    subscribers = [sub['SubscriberName'] for sub in subscribers_data]
+    subscribers = Usagereport.objects.filter(
+        DetailsViewedDate__gte=start_date,
+        DetailsViewedDate__lt=end_date
+    ).values_list('SubscriberName', flat=True).distinct().order_by('SubscriberName')
+
+    # Format dates as strings for the template
+    start_date_str = start_date.strftime('%Y-%m-%d')
+    end_date_str = end_date.strftime('%Y-%m-%d')
 
     context = {
         'subscribers': subscribers,
@@ -138,18 +139,11 @@ def single_report(request):
     # Initialize report generation tracking
     report_gen = None
     
-    # Use raw SQL to fetch ALL distinct subscriber names without date filtering
-    query = """
-        SELECT DISTINCT SubscriberName 
-        FROM usagereport 
-        ORDER BY SubscriberName
-    """
+    # Use Django ORM to fetch ALL distinct subscriber names without date filtering
+    subscribers = Usagereport.objects.values_list('SubscriberName', flat=True).distinct().order_by('SubscriberName')
     
     start_date_str = first_day_of_month.strftime('%Y-%m-%d')
     end_date_str = first_day_next_month.strftime('%Y-%m-%d')
-    
-    subscribers_data = execute_raw_sql(query)
-    subscribers = [sub['SubscriberName'] for sub in subscribers_data if sub['SubscriberName']]
     
     # Initial context with date range and subscribers
     context = {
@@ -219,46 +213,75 @@ def single_report(request):
             messages.error(request, f"Invalid date format: {str(e)}")
             return render(request, 'bulkrep/single_report.html', context)
 
-        # Fetch data using raw SQL similar to VBA script
+        # Fetch data using Django ORM
         if include_bills:
-            # Query for summary bills (matches VBA's SQL query)
-            summary_query = """
-                SELECT 
-                SUM(CASE WHEN ProductName LIKE '%%Snap Check%%' THEN 1 ELSE 0 END) AS consumer_snap_check,
-                SUM(CASE WHEN ProductName LIKE '%%Basic Trace%%' THEN 1 ELSE 0 END) AS consumer_basic_trace,
-                SUM(CASE WHEN ProductName LIKE '%%Basic Credit%%' THEN 1 ELSE 0 END) AS consumer_basic_credit,
-                SUM(CASE WHEN ProductName LIKE '%%Detailed Credit%%' AND ProductName NOT LIKE '%%X-SCore%%' THEN 1 ELSE 0 END) AS consumer_detailed_credit,
-                SUM(CASE WHEN ProductName LIKE '%%X-SCore Consumer Detailed Credit%%' THEN 1 ELSE 0 END) AS xscore_consumer_credit,
-                SUM(CASE WHEN ProductName LIKE '%%Commercial Basic Trace%%' THEN 1 ELSE 0 END) AS commercial_basic_trace,
-                SUM(CASE WHEN ProductName LIKE '%%Commercial detailed Credit%%' THEN 1 ELSE 0 END) AS commercial_detailed_credit,
-                SUM(CASE WHEN ProductName LIKE '%%Enquiry Report%%' THEN 1 ELSE 0 END) AS enquiry_report,
-                SUM(CASE WHEN ProductName LIKE '%%Consumer Dud Cheque%%' THEN 1 ELSE 0 END) AS consumer_dud_cheque,
-                SUM(CASE WHEN ProductName LIKE '%%Commercial Dud Cheque%%' THEN 1 ELSE 0 END) AS commercial_dud_cheque,
-                SUM(CASE WHEN ProductName LIKE '%%Director Basic Report%%' THEN 1 ELSE 0 END) AS director_basic_report,
-                SUM(CASE WHEN ProductName LIKE '%%Director Detailed Report%%' THEN 1 ELSE 0 END) AS director_detailed_report
-                FROM usagereport
-                WHERE DetailsViewedDate >= %s
-                AND DetailsViewedDate <= %s
-                AND SubscriberName = %s
-            """
-            summary_bills_data = execute_raw_sql(summary_query, [start_date_str, end_date_str, subscriber_id])
-            summary_bills = summary_bills_data[0] if summary_bills_data else {}
+            # Query for summary bills using Django ORM
+            queryset = Usagereport.objects.filter(
+                DetailsViewedDate__gte=start_date,
+                DetailsViewedDate__lte=end_date,
+                SubscriberName=subscriber_id
+            )
+            
+            # Initialize summary dictionary with all possible keys
+            summary_bills = {
+                'consumer_snap_check': 0,
+                'consumer_basic_trace': 0,
+                'consumer_basic_credit': 0,
+                'consumer_detailed_credit': 0,
+                'xscore_consumer_credit': 0,
+                'commercial_basic_trace': 0,
+                'commercial_detailed_credit': 0,
+                'enquiry_report': 0,
+                'consumer_dud_cheque': 0,
+                'commercial_dud_cheque': 0,
+                'director_basic_report': 0,
+                'director_detailed_report': 0
+            }
+            
+            # Count each product type using Django ORM's Q objects for case-insensitive contains
+            summary_bills['consumer_snap_check'] = queryset.filter(ProductName__icontains='Snap Check').count()
+            summary_bills['consumer_basic_trace'] = queryset.filter(ProductName__icontains='Basic Trace').count()
+            summary_bills['consumer_basic_credit'] = queryset.filter(ProductName__icontains='Basic Credit').count()
+            summary_bills['consumer_detailed_credit'] = queryset.filter(
+                ProductName__icontains='Detailed Credit'
+            ).exclude(ProductName__icontains='X-SCore').count()
+            summary_bills['xscore_consumer_credit'] = queryset.filter(
+                ProductName__icontains='X-SCore Consumer Detailed Credit'
+            ).count()
+            summary_bills['commercial_basic_trace'] = queryset.filter(
+                ProductName__icontains='Commercial Basic Trace'
+            ).count()
+            summary_bills['commercial_detailed_credit'] = queryset.filter(
+                ProductName__icontains='Commercial detailed Credit'
+            ).count()
+            summary_bills['enquiry_report'] = queryset.filter(
+                ProductName__icontains='Enquiry Report'
+            ).count()
+            summary_bills['consumer_dud_cheque'] = queryset.filter(
+                ProductName__icontains='Consumer Dud Cheque'
+            ).count()
+            summary_bills['commercial_dud_cheque'] = queryset.filter(
+                ProductName__icontains='Commercial Dud Cheque'
+            ).count()
+            summary_bills['director_basic_report'] = queryset.filter(
+                ProductName__icontains='Director Basic Report'
+            ).count()
+            summary_bills['director_detailed_report'] = queryset.filter(
+                ProductName__icontains='Director Detailed Report'
+            ).count()
         else:
             summary_bills = {}
 
-        # Query for product details using raw SQL
+        # Query for product details using Django ORM
         if include_products:
-            product_query = """
-                SELECT SubscriberName, SystemUser, SearchIdentity, SubscriberEnquiryDate, 
-                       SearchOutput, DetailsViewedDate, ProductInputed, ProductName 
-                FROM usagereport 
-                WHERE DetailsViewedDate >= %s 
-                AND DetailsViewedDate <= %s 
-                AND SubscriberName = %s 
-                ORDER BY ProductName, DetailsViewedDate
-            """
-            
-            product_data = execute_raw_sql(product_query, [start_date_str, end_date_str, subscriber_id])
+            product_data = Usagereport.objects.filter(
+                DetailsViewedDate__gte=start_date,
+                DetailsViewedDate__lte=end_date,
+                SubscriberName=subscriber_id
+            ).order_by('ProductName', 'DetailsViewedDate').values(
+                'SubscriberName', 'SystemUser', 'SearchIdentity', 'SubscriberEnquiryDate',
+                'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
+            )
             
             # Group by ProductName
             product_sections = {}
@@ -267,6 +290,8 @@ def single_report(request):
                 if product_name not in product_sections:
                     product_sections[product_name] = []
                 product_sections[product_name].append(record)
+            
+            product_data = list(product_data)  # Convert to list for compatibility
         else:
             product_sections = {}
             product_data = []
@@ -282,16 +307,6 @@ def single_report(request):
             wb = openpyxl.load_workbook(template_path)
             ws = wb.active
             
-            # Add the logo image to the Excel template
-            # logo_path = os.path.join(settings.BASE_DIR, 'bulkrep', 'static', 'bulkrep', 'images', 'image.png')
-            # if os.path.exists(logo_path):
-            #     # Create an image object
-            #     img = Image(logo_path)
-            #     # Resize the image if needed (adjust width and height as necessary)
-            #     img.width = 200
-            #     img.height = 70
-            #     # Add the image to cell A1
-            #     ws.add_image(img, 'A1')
             
             # Look for "Productname" cell to identify where to put the dynamic product name
             product_name_cell = None
@@ -1029,14 +1044,11 @@ def bulk_report(request):
                 return render(request, 'bulkrep/bulk_report.html', context)
 
         elif generation_method == 'all':
-            # Use raw SQL to get all subscribers, similar to VBA script
-            query = """
-                SELECT DISTINCT SubscriberName 
-                FROM usagereport 
-                WHERE DetailsViewedDate >= %s AND DetailsViewedDate <= %s
-            """
-            subscribers_data = execute_raw_sql(query, [start_date_str, end_date_str])
-            subscribers_list = [sub['SubscriberName'] for sub in subscribers_data]
+            # Use Django ORM to get all distinct subscribers
+            subscribers_list = list(Usagereport.objects.filter(
+                DetailsViewedDate__gte=start_date,
+                DetailsViewedDate__lte=end_date
+            ).values_list('SubscriberName', flat=True).distinct())
 
         if not subscribers_list:
             messages.warning(request, f"No subscribers found for the selected criteria between {start_date_display} and {end_date_display}.")
@@ -1054,47 +1066,78 @@ def bulk_report(request):
                     try:
                         # Fetch data using raw SQL - summary bills
                         
+                        # Fetch data using Django ORM
                         if include_bills:
-                            summary_query = """
-                                SELECT 
-                                SUM(CASE WHEN ProductName LIKE '%%Snap Check%%' THEN 1 ELSE 0 END) AS consumer_snap_check,
-                                SUM(CASE WHEN ProductName LIKE '%%Basic Trace%%' THEN 1 ELSE 0 END) AS consumer_basic_trace,
-                                SUM(CASE WHEN ProductName LIKE '%%Basic Credit%%' THEN 1 ELSE 0 END) AS consumer_basic_credit,
-                                SUM(CASE WHEN ProductName LIKE '%%Detailed Credit%%' AND ProductName NOT LIKE '%%X-SCore%%' THEN 1 ELSE 0 END) AS consumer_detailed_credit,
-                                SUM(CASE WHEN ProductName LIKE '%%X-SCore Consumer Detailed Credit%%' THEN 1 ELSE 0 END) AS xscore_consumer_credit,
-                                SUM(CASE WHEN ProductName LIKE '%%Commercial Basic Trace%%' THEN 1 ELSE 0 END) AS commercial_basic_trace,
-                                SUM(CASE WHEN ProductName LIKE '%%Commercial detailed Credit%%' THEN 1 ELSE 0 END) AS commercial_detailed_credit,
-                                SUM(CASE WHEN ProductName LIKE '%%Enquiry Report%%' THEN 1 ELSE 0 END) AS enquiry_report,
-                                SUM(CASE WHEN ProductName LIKE '%%Consumer Dud Cheque%%' THEN 1 ELSE 0 END) AS consumer_dud_cheque,
-                                SUM(CASE WHEN ProductName LIKE '%%Commercial Dud Cheque%%' THEN 1 ELSE 0 END) AS commercial_dud_cheque,
-                                SUM(CASE WHEN ProductName LIKE '%%Director Basic Report%%' THEN 1 ELSE 0 END) AS director_basic_report,
-                                SUM(CASE WHEN ProductName LIKE '%%Director Detailed Report%%' THEN 1 ELSE 0 END) AS director_detailed_report
-                                FROM usagereport
-                                WHERE DetailsViewedDate >= %s
-                                AND DetailsViewedDate <= %s
-                                AND SubscriberName = %s
-                            """
-                            summary_bills_data = execute_raw_sql(summary_query, [start_date_str, end_date_str, subscriber_id])
-                            summary_bills = summary_bills_data[0] if summary_bills_data else {}
+                            # Query for summary bills using Django ORM
+                            queryset = Usagereport.objects.filter(
+                                DetailsViewedDate__gte=start_date,
+                                DetailsViewedDate__lte=end_date,
+                                SubscriberName=subscriber_id
+                            )
+                            
+                            # Initialize summary dictionary with all possible keys
+                            summary_bills = {
+                                'consumer_snap_check': 0,
+                                'consumer_basic_trace': 0,
+                                'consumer_basic_credit': 0,
+                                'consumer_detailed_credit': 0,
+                                'xscore_consumer_credit': 0,
+                                'commercial_basic_trace': 0,
+                                'commercial_detailed_credit': 0,
+                                'enquiry_report': 0,
+                                'consumer_dud_cheque': 0,
+                                'commercial_dud_cheque': 0,
+                                'director_basic_report': 0,
+                                'director_detailed_report': 0
+                            }
+                            
+                            # Count each product type using Django ORM's Q objects for case-insensitive contains
+                            summary_bills['consumer_snap_check'] = queryset.filter(ProductName__icontains='Snap Check').count()
+                            summary_bills['consumer_basic_trace'] = queryset.filter(ProductName__icontains='Basic Trace').count()
+                            summary_bills['consumer_basic_credit'] = queryset.filter(ProductName__icontains='Basic Credit').count()
+                            summary_bills['consumer_detailed_credit'] = queryset.filter(
+                                ProductName__icontains='Detailed Credit'
+                            ).exclude(ProductName__icontains='X-SCore').count()
+                            summary_bills['xscore_consumer_credit'] = queryset.filter(
+                                ProductName__icontains='X-SCore Consumer Detailed Credit'
+                            ).count()
+                            summary_bills['commercial_basic_trace'] = queryset.filter(
+                                ProductName__icontains='Commercial Basic Trace'
+                            ).count()
+                            summary_bills['commercial_detailed_credit'] = queryset.filter(
+                                ProductName__icontains='Commercial detailed Credit'
+                            ).count()
+                            summary_bills['enquiry_report'] = queryset.filter(
+                                ProductName__icontains='Enquiry Report'
+                            ).count()
+                            summary_bills['consumer_dud_cheque'] = queryset.filter(
+                                ProductName__icontains='Consumer Dud Cheque'
+                            ).count()
+                            summary_bills['commercial_dud_cheque'] = queryset.filter(
+                                ProductName__icontains='Commercial Dud Cheque'
+                            ).count()
+                            summary_bills['director_basic_report'] = queryset.filter(
+                                ProductName__icontains='Director Basic Report'
+                            ).count()
+                            summary_bills['director_detailed_report'] = queryset.filter(
+                                ProductName__icontains='Director Detailed Report'
+                            ).count()
                         else:
                             summary_bills = {}
                         
-                        # Fetch product details
+                        # Fetch product details using Django ORM
                         if include_products:
-                            product_query = """
-                                SELECT SubscriberName, SystemUser, SearchIdentity, SubscriberEnquiryDate, 
-                                    SearchOutput, DetailsViewedDate, ProductInputed, ProductName 
-                                FROM usagereport 
-                                WHERE DetailsViewedDate >= %s 
-                                AND DetailsViewedDate <= %s 
-                                AND SubscriberName = %s 
-                                ORDER BY ProductName, DetailsViewedDate
-                            """
-                            
-                            product_data = execute_raw_sql(product_query, [start_date_str, end_date_str, subscriber_id])
+                            product_data = Usagereport.objects.filter(
+                                DetailsViewedDate__gte=start_date,
+                                DetailsViewedDate__lte=end_date,
+                                SubscriberName=subscriber_id
+                            ).order_by('ProductName', 'DetailsViewedDate').values(
+                                'SubscriberName', 'SystemUser', 'SearchIdentity', 'SubscriberEnquiryDate',
+                                'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
+                            )
                             
                             # Skip if no data
-                            if not product_data:
+                            if not product_data.exists():
                                 continue
                             
                             # Group by ProductName
