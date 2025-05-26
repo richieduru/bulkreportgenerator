@@ -4,9 +4,7 @@ from django.http import HttpResponse, FileResponse
 from django.db.models import Q, Count, Case, When, IntegerField, Sum
 from django.conf import settings
 from django.utils import timezone
-# Remove unused import
-# from django.db import connection
-from .models import Usagereport
+from .models import Usagereport, ReportGeneration, ENQUIRY_RATES
 from datetime import date, timedelta, datetime
 import calendar
 import io
@@ -22,7 +20,7 @@ import os.path
 import uuid
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
-from .models import ReportGeneration
+from decimal import Decimal, ROUND_HALF_UP
 
 def write_to_cell(ws, row, col, value):
     """
@@ -369,7 +367,7 @@ def single_report(request):
                
             
             if include_bills:
-                # Match exact VBA cell addressing approach but safely handle merged cells
+                # Set quantities in column I (existing code)
                 safe_cell_assignment(ws, 12, 9, summary_bills.get('consumer_snap_check', 0) or 0)  # I12
                 safe_cell_assignment(ws, 13, 9, summary_bills.get('consumer_basic_trace', 0) or 0)  # I13
                 safe_cell_assignment(ws, 14, 9, summary_bills.get('consumer_basic_credit', 0) or 0)  # I14
@@ -382,6 +380,87 @@ def single_report(request):
                 safe_cell_assignment(ws, 23, 9, summary_bills.get('commercial_dud_cheque', 0) or 0)  # I23
                 safe_cell_assignment(ws, 25, 9, summary_bills.get('director_basic_report', 0) or 0)  # I25
                 safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)  # I26
+                
+                # Set rates in column M (13) - merged from M to O with Naira formatting
+                safe_cell_assignment(ws, 12, 13, f"₦{ENQUIRY_RATES['consumer_snap_check']:,.2f}")  # M12
+                safe_cell_assignment(ws, 13, 13, f"₦{ENQUIRY_RATES['consumer_basic_trace']:,.2f}")  # M13
+                safe_cell_assignment(ws, 14, 13, f"₦{ENQUIRY_RATES['consumer_basic_credit']:,.2f}")  # M14
+                safe_cell_assignment(ws, 15, 13, f"₦{ENQUIRY_RATES['consumer_detailed_credit']:,.2f}")  # M15
+                safe_cell_assignment(ws, 16, 13, f"₦{ENQUIRY_RATES['xscore_consumer_credit']:,.2f}")  # M16
+                safe_cell_assignment(ws, 17, 13, f"₦{ENQUIRY_RATES['commercial_basic_trace']:,.2f}")  # M17
+                safe_cell_assignment(ws, 18, 13, f"₦{ENQUIRY_RATES['commercial_detailed_credit']:,.2f}")  # M18
+                safe_cell_assignment(ws, 20, 13, f"₦{ENQUIRY_RATES['enquiry_report']:,.2f}")  # M20
+                safe_cell_assignment(ws, 22, 13, f"₦{ENQUIRY_RATES['consumer_dud_cheque']:,.2f}")  # M22
+                safe_cell_assignment(ws, 23, 13, f"₦{ENQUIRY_RATES['commercial_dud_cheque']:,.2f}")  # M23
+                safe_cell_assignment(ws, 25, 13, f"₦{ENQUIRY_RATES['director_basic_report']:,.2f}")  # M25
+                safe_cell_assignment(ws, 26, 13, f"₦{ENQUIRY_RATES['director_detailed_report']:,.2f}")  # M26
+                
+                # Calculate and set amounts in column P (16) - merged from P to Q
+                total_amount = 0
+                
+                # Calculate amounts (quantity × rate) and populate column P with Naira formatting
+                consumer_snap_amount = (summary_bills.get('consumer_snap_check', 0) or 0) * ENQUIRY_RATES['consumer_snap_check']
+                safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
+                total_amount += consumer_snap_amount
+                
+                consumer_basic_trace_amount = (summary_bills.get('consumer_basic_trace', 0) or 0) * ENQUIRY_RATES['consumer_basic_trace']
+                safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
+                total_amount += consumer_basic_trace_amount
+                
+                consumer_basic_credit_amount = (summary_bills.get('consumer_basic_credit', 0) or 0) * ENQUIRY_RATES['consumer_basic_credit']
+                safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
+                total_amount += consumer_basic_credit_amount
+                
+                consumer_detailed_credit_amount = (summary_bills.get('consumer_detailed_credit', 0) or 0) * ENQUIRY_RATES['consumer_detailed_credit']
+                safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
+                total_amount += consumer_detailed_credit_amount
+                
+                xscore_consumer_amount = (summary_bills.get('xscore_consumer_credit', 0) or 0) * ENQUIRY_RATES['xscore_consumer_credit']
+                safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
+                total_amount += xscore_consumer_amount
+                
+                commercial_basic_trace_amount = (summary_bills.get('commercial_basic_trace', 0) or 0) * ENQUIRY_RATES['commercial_basic_trace']
+                safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
+                total_amount += commercial_basic_trace_amount
+                
+                commercial_detailed_credit_amount = (summary_bills.get('commercial_detailed_credit', 0) or 0) * ENQUIRY_RATES['commercial_detailed_credit']
+                safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
+                total_amount += commercial_detailed_credit_amount
+                
+                enquiry_report_amount = (summary_bills.get('enquiry_report', 0) or 0) * ENQUIRY_RATES['enquiry_report']
+                safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
+                total_amount += enquiry_report_amount
+                
+                consumer_dud_amount = (summary_bills.get('consumer_dud_cheque', 0) or 0) * ENQUIRY_RATES['consumer_dud_cheque']
+                safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
+                total_amount += consumer_dud_amount
+                
+                commercial_dud_amount = (summary_bills.get('commercial_dud_cheque', 0) or 0) * ENQUIRY_RATES['commercial_dud_cheque']
+                safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
+                total_amount += commercial_dud_amount
+                
+                director_basic_amount = (summary_bills.get('director_basic_report', 0) or 0) * ENQUIRY_RATES['director_basic_report']
+                safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
+                total_amount += director_basic_amount
+                
+                director_detailed_amount = (summary_bills.get('director_detailed_report', 0) or 0) * ENQUIRY_RATES['director_detailed_report']
+                safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
+                total_amount += director_detailed_amount
+                
+                # Set total amount with Naira formatting
+                safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")  # P28 for total
+                
+                # Calculate 7.5% VAT amount
+                vat_amount = total_amount * 0.075
+                safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")  # P29 for VAT amount
+                
+                # Calculate amount due (total + VAT)
+                amount_due = total_amount + vat_amount
+                safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")  # P30 for amount due
+                
+                print(f"Debug: Total amount calculated: {total_amount}")
+                print(f"Debug: VAT amount (7.5%): {vat_amount}")
+                print(f"Debug: Amount Due (Total + VAT): {amount_due}")
             
             if include_products:
                 start_row_offset = 36  # Initial start row for product sections on Sheet1
@@ -916,22 +995,77 @@ def merge_and_center_data_row(sheet, row):
     # Use top vertical alignment for better readability with wrapped text
     cell_O.alignment = Alignment(horizontal='center', vertical='top', wrap_text=True)
 
+# Define product rates mapping
+PRODUCT_RATES = {
+    'Consumer Snap Check': Decimal('500.00'),
+    'Consumer Basic Trace': Decimal('170.00'),
+    'Consumer Basic Credit': Decimal('170.00'),
+    'Consumer Detailed Credit': Decimal('240.00'),
+    'X-Score Consumer Detailed Credit': Decimal('500.00'),
+    'Commercial Basic Trace': Decimal('275.00'),
+    'Commercial Detailed Credit': Decimal('500.00'),
+    'Enquiry Report': Decimal('50.00'),
+    'Consumer Dud Cheque': Decimal('0.00'),
+    'Commercial Dud Cheque': Decimal('0.00'),
+    'Director Basic Report': Decimal('0.00'),
+    'Director Detailed Report': Decimal('0.00'),
+}
+
+def populate_rate_and_amount(ws, start_row, end_row):
+    """
+    Populate rate (columns M-O) and calculate amount (columns P-Q) based on product name (column D).
+    
+    Args:
+        ws: Worksheet object
+        start_row: First data row (1-based)
+        end_row: Last data row (inclusive)
+    """
+    print(f"DEBUG: populate_rate_and_amount called with start_row={start_row}, end_row={end_row}")
+    print(f"DEBUG: First 5 product names in PRODUCT_RATES: {list(PRODUCT_RATES.keys())[:5]}")
+    
+    for row in range(start_row, end_row + 1):
+        # Get product name from column D (4th column)
+        product_cell = ws.cell(row=row, column=4)
+        product_name = str(product_cell.value).strip() if product_cell.value else ""
+        print(f"DEBUG: Row {row} - Product: '{product_name}'")
+        
+        # Get rate from mapping, default to 0 if not found
+        rate = PRODUCT_RATES.get(product_name, Decimal('0.00'))
+        print(f"DEBUG:   - Rate: ₦{rate:,.2f}")
+        
+        # Populate rate in columns M-O (merged)
+        write_to_cell(ws, row, 13, f"₦{rate:,.2f}")  # Column M
+        print(f"DEBUG:   - Wrote rate to column M")
+        
+        # Calculate amount (rate * 1) since each row represents one search
+        amount = rate * Decimal('1.00')
+        
+        # Populate amount in columns P-Q (merged)
+        write_to_cell(ws, row, 16, f"₦{amount:,.2f}")  # Column P
+        print(f"DEBUG:   - Wrote amount to column P")
+
 def add_generated_by(ws, username, last_data_row=None):
     """
-    Add 'Report Generated by: <username>' two rows below the last data row (or at row 10 if no data), merging O-Q, Trebuchet MS, bold, italic, centered.
+    Add 'Report Generated by: <username>' two rows below the last data row (or at row 10 if no data), 
+    merging O-Q, Trebuchet MS, bold, italic, centered.
     """
-    from openpyxl.styles import Font
-    from openpyxl.styles import Alignment as OpenpyxlAlignment
-    if not last_data_row or last_data_row < 1:
-        target_row = 10
-    else:
-        target_row = last_data_row + 5
-    ws.merge_cells(start_row=target_row, start_column=15, end_row=target_row, end_column=17)
-    cell = ws.cell(row=target_row, column=15)
+    # If no last_data_row provided, default to row 10
+    if last_data_row is None:
+        last_data_row = 10
+    
+    # Add two rows below the last data row
+    signature_row = last_data_row + 2
+    
+    # Merge cells O-Q for the signature line
+    ws.merge_cells(start_row=signature_row, start_column=15, end_row=signature_row, end_column=17)
+    
+    # Set the value and formatting for the signature line
+    cell = ws.cell(row=signature_row, column=15)
     cell.value = f"Report Generated by: {username}"
-    cell.font = Font(name='Trebuchet MS', bold=True, italic=True, color='FF7F7F7F')
-    cell.alignment = OpenpyxlAlignment(horizontal='center', vertical='center', wrap_text=True)
-    ws.row_dimensions[target_row].height = 26
+    cell.font = openpyxl.styles.Font(name='Trebuchet MS', bold=True, italic=True, color='FF7F7F7F')
+    cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center', wrap_text=True)
+    ws.row_dimensions[signature_row].height = 26
+    return signature_row
 
 @login_required
 def bulk_report(request):
@@ -1001,9 +1135,6 @@ def bulk_report(request):
             start_date_display = start_date.strftime('%d/%m/%Y')
             end_date_display = end_date.strftime('%d/%m/%Y')
             
-            # Log the date processing for debugging
-            print(f"Bulk report date processing: {start_date_str} -> {start_date} -> {start_date_display}")
-            print(f"Bulk report date processing: {end_date_str} -> {end_date} -> {end_date_display}")
         except (ValueError, TypeError) as e:
             messages.error(request, f"Invalid date format: {str(e)}")
             return render(request, 'bulkrep/bulk_report.html', context)
@@ -1218,6 +1349,7 @@ def bulk_report(request):
                             safe_cell_assignment(ws, 6, 4, date_range_text)  # D6
                         
                         if include_bills:
+                            # Set quantities in column I
                             safe_cell_assignment(ws, 12, 9, summary_bills.get('consumer_snap_check', 0) or 0)
                             safe_cell_assignment(ws, 13, 9, summary_bills.get('consumer_basic_trace', 0) or 0)
                             safe_cell_assignment(ws, 14, 9, summary_bills.get('consumer_basic_credit', 0) or 0)
@@ -1230,7 +1362,84 @@ def bulk_report(request):
                             safe_cell_assignment(ws, 23, 9, summary_bills.get('commercial_dud_cheque', 0) or 0)
                             safe_cell_assignment(ws, 25, 9, summary_bills.get('director_basic_report', 0) or 0)
                             safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)
-                        
+                            
+                            # Set rates in column M (13) - merged from M to O with Naira formatting
+                            safe_cell_assignment(ws, 12, 13, f"₦{ENQUIRY_RATES['consumer_snap_check']:,.2f}")  # M12
+                            safe_cell_assignment(ws, 13, 13, f"₦{ENQUIRY_RATES['consumer_basic_trace']:,.2f}")  # M13
+                            safe_cell_assignment(ws, 14, 13, f"₦{ENQUIRY_RATES['consumer_basic_credit']:,.2f}")  # M14
+                            safe_cell_assignment(ws, 15, 13, f"₦{ENQUIRY_RATES['consumer_detailed_credit']:,.2f}")  # M15
+                            safe_cell_assignment(ws, 16, 13, f"₦{ENQUIRY_RATES['xscore_consumer_credit']:,.2f}")  # M16
+                            safe_cell_assignment(ws, 17, 13, f"₦{ENQUIRY_RATES['commercial_basic_trace']:,.2f}")  # M17
+                            safe_cell_assignment(ws, 18, 13, f"₦{ENQUIRY_RATES['commercial_detailed_credit']:,.2f}")  # M18
+                            safe_cell_assignment(ws, 20, 13, f"₦{ENQUIRY_RATES['enquiry_report']:,.2f}")  # M20
+                            safe_cell_assignment(ws, 22, 13, f"₦{ENQUIRY_RATES['consumer_dud_cheque']:,.2f}")  # M22
+                            safe_cell_assignment(ws, 23, 13, f"₦{ENQUIRY_RATES['commercial_dud_cheque']:,.2f}")  # M23
+                            safe_cell_assignment(ws, 25, 13, f"₦{ENQUIRY_RATES['director_basic_report']:,.2f}")  # M25
+                            safe_cell_assignment(ws, 26, 13, f"₦{ENQUIRY_RATES['director_detailed_report']:,.2f}")  # M26
+                            
+                            # Calculate and set amounts in column P (16) - merged from P to Q
+                            total_amount = 0
+                            
+                            # Calculate amounts (quantity × rate) and populate column P with Naira formatting
+                            consumer_snap_amount = (summary_bills.get('consumer_snap_check', 0) or 0) * ENQUIRY_RATES['consumer_snap_check']
+                            safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
+                            total_amount += consumer_snap_amount
+                            
+                            consumer_basic_trace_amount = (summary_bills.get('consumer_basic_trace', 0) or 0) * ENQUIRY_RATES['consumer_basic_trace']
+                            safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
+                            total_amount += consumer_basic_trace_amount
+                            
+                            consumer_basic_credit_amount = (summary_bills.get('consumer_basic_credit', 0) or 0) * ENQUIRY_RATES['consumer_basic_credit']
+                            safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
+                            total_amount += consumer_basic_credit_amount
+                            
+                            consumer_detailed_credit_amount = (summary_bills.get('consumer_detailed_credit', 0) or 0) * ENQUIRY_RATES['consumer_detailed_credit']
+                            safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
+                            total_amount += consumer_detailed_credit_amount
+                            
+                            xscore_consumer_amount = (summary_bills.get('xscore_consumer_credit', 0) or 0) * ENQUIRY_RATES['xscore_consumer_credit']
+                            safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
+                            total_amount += xscore_consumer_amount
+                            
+                            commercial_basic_trace_amount = (summary_bills.get('commercial_basic_trace', 0) or 0) * ENQUIRY_RATES['commercial_basic_trace']
+                            safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
+                            total_amount += commercial_basic_trace_amount
+                            
+                            commercial_detailed_credit_amount = (summary_bills.get('commercial_detailed_credit', 0) or 0) * ENQUIRY_RATES['commercial_detailed_credit']
+                            safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
+                            total_amount += commercial_detailed_credit_amount
+                            
+                            enquiry_report_amount = (summary_bills.get('enquiry_report', 0) or 0) * ENQUIRY_RATES['enquiry_report']
+                            safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
+                            total_amount += enquiry_report_amount
+                            
+                            consumer_dud_amount = (summary_bills.get('consumer_dud_cheque', 0) or 0) * ENQUIRY_RATES['consumer_dud_cheque']
+                            safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
+                            total_amount += consumer_dud_amount
+                            
+                            commercial_dud_amount = (summary_bills.get('commercial_dud_cheque', 0) or 0) * ENQUIRY_RATES['commercial_dud_cheque']
+                            safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
+                            total_amount += commercial_dud_amount
+                            
+                            director_basic_amount = (summary_bills.get('director_basic_report', 0) or 0) * ENQUIRY_RATES['director_basic_report']
+                            safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
+                            total_amount += director_basic_amount
+                            
+                            director_detailed_amount = (summary_bills.get('director_detailed_report', 0) or 0) * ENQUIRY_RATES['director_detailed_report']
+                            safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
+                            total_amount += director_detailed_amount
+                            
+                            # Set total amount with Naira formatting
+                            safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")  # P28 for total
+                            
+                            # Calculate 7.5% VAT amount
+                            vat_amount = total_amount * 0.075
+                            safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")  # P29 for VAT amount
+                            
+                            # Calculate amount due (total + VAT)
+                            amount_due = total_amount + vat_amount
+                            safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")  # P30 for amount due
+                            
                         if include_products:
                             row_offset = 36
                             current_sheet = ws
@@ -1283,12 +1492,34 @@ def bulk_report(request):
                                 row_offset += len(product_records)
                                 lastProduct = product_name
                         
+                        # Populate rate and amount columns for all data rows
+                        print(f"\nDEBUG: Before populate_rate_and_amount")
+                        print(f"DEBUG: include_products = {include_products}")
+                        print(f"DEBUG: 'current_row_offset' in locals() = {'current_row_offset' in locals()}")
+                        if 'current_row_offset' in locals():
+                            print(f"DEBUG: current_row_offset = {current_row_offset}")
+                        
+                        if include_products and 'current_row_offset' in locals() and current_row_offset > 36:
+                            # Calculate the first and last row with data (rows 36 to current_row_offset - 1)
+                            first_data_row = 36
+                            last_row = current_row_offset - 1
+                            print(f"DEBUG: Calling populate_rate_and_amount(ws, {first_data_row}, {last_row})")
+                            populate_rate_and_amount(ws, first_data_row, last_row)
+                        else:
+                            print("DEBUG: populate_rate_and_amount NOT called because:")
+                            if not include_products:
+                                print("  - include_products is False")
+                            if 'current_row_offset' not in locals():
+                                print("  - current_row_offset is not defined")
+                            elif current_row_offset <= 36:
+                                print(f"  - current_row_offset ({current_row_offset}) is not > 36")
+                        
                         # Auto-size columns for better readability
                         for sheet in wb.worksheets:
                             auto_size_columns(sheet)
                         
                         # Add 'Generated by: <username>' to the first available merged O-Q row, or row 8 if none, with bold and italic formatting
-                        add_generated_by(ws, request.user.username, current_row_offset - 1)
+                        add_generated_by(ws, request.user.username, current_row_offset - 1 if 'current_row_offset' in locals() else None)
                         
                         # Save to buffer
                         wb.save(excel_buffer)
@@ -1348,4 +1579,3 @@ def bulk_report(request):
             return render(request, 'bulkrep/bulk_report.html', context)
 
     return render(request, 'bulkrep/bulk_report.html', context)
-

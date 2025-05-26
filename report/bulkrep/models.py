@@ -173,3 +173,19 @@ class ReportGeneration(models.Model):
         if self.completed_at and self.generated_at:
             return (self.completed_at - self.generated_at).total_seconds()
         return None
+
+# Add this after the imports at the top of the file
+ENQUIRY_RATES = {
+    'consumer_snap_check': 500.00,
+    'consumer_basic_trace': 170.00,
+    'consumer_basic_credit': 170.00,
+    'consumer_detailed_credit': 240.00,
+    'xscore_consumer_credit': 500.00,
+    'commercial_basic_trace': 275.00,
+    'commercial_detailed_credit': 500.00,
+    'enquiry_report': 50.00,
+    'consumer_dud_cheque': 0.00,
+    'commercial_dud_cheque': 0.00,
+    'director_basic_report': 0.00,
+    'director_detailed_report': 0.00,
+}
