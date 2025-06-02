@@ -1,8 +1,34 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from decimal import Decimal
 
 # Create your models here.
+
+class SubscriberProductRate(models.Model):
+    # Exactly matching the 3 columns in the actual database table
+    # Make subscriber_name the primary key to prevent Django from looking for an id field
+    subscriber_name = models.CharField(max_length=255, db_column='subscriber_name', primary_key=True)
+    product_name = models.CharField(max_length=255, db_column='ProductName')
+    rate = models.DecimalField(max_digits=10, decimal_places=2, db_column='rate')
+    
+    # This is crucial - we need to tell Django not to look for an 'id' field
+    # and that these two fields together form the primary key
+    class Meta:
+        managed = False  # Django won't create or alter this table
+        db_table = 'SubscriberProductRate'  # The exact name of your existing table
+        # Define the composite primary key
+        unique_together = (('subscriber_name', 'product_name'),)
+        # This is critical - it tells Django not to assume an 'id' field exists
+        # for lookups and to use the fields we define as the primary key fields instead
+
+    # We need to set this to return the composite primary key for Django to work properly
+    def natural_key(self):
+        return (self.subscriber_name, self.product_name)
+        
+    def __str__(self):
+        return f"{self.subscriber_name} - {self.product_name} - {self.rate}"
+
 
 class Usagereport(models.Model):
     # Define a primary key field that Django will use internally but won't be part of SQL queries
@@ -71,7 +97,7 @@ class ReportGeneration(models.Model):
         choices=REPORT_TYPES,
         help_text='Type of report generated',
         db_index=True
-    )
+)
     
     status = models.CharField(
         max_length=15,
@@ -176,16 +202,16 @@ class ReportGeneration(models.Model):
 
 # Add this after the imports at the top of the file
 ENQUIRY_RATES = {
-    'consumer_snap_check': 500.00,
-    'consumer_basic_trace': 170.00,
-    'consumer_basic_credit': 170.00,
-    'consumer_detailed_credit': 240.00,
-    'xscore_consumer_credit': 500.00,
-    'commercial_basic_trace': 275.00,
-    'commercial_detailed_credit': 500.00,
-    'enquiry_report': 50.00,
-    'consumer_dud_cheque': 0.00,
-    'commercial_dud_cheque': 0.00,
-    'director_basic_report': 0.00,
-    'director_detailed_report': 0.00,
+    'consumer_snap_check': Decimal('500.00'),
+    'consumer_basic_trace': Decimal('170.00'),
+    'consumer_basic_credit': Decimal('170.00'),
+    'consumer_detailed_credit': Decimal('240.00'),
+    'xscore_consumer_credit': Decimal('500.00'),
+    'commercial_basic_trace': Decimal('275.00'),
+    'commercial_detailed_credit': Decimal('500.00'),
+    'enquiry_report': Decimal('50.00'),
+    'consumer_dud_cheque': Decimal('0.00'),
+    'commercial_dud_cheque': Decimal('0.00'),
+    'director_basic_report': Decimal('0.00'),
+    'director_detailed_report': Decimal('0.00'),
 }

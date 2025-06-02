@@ -4,7 +4,7 @@ from django.http import HttpResponse, FileResponse
 from django.db.models import Q, Count, Case, When, IntegerField, Sum
 from django.conf import settings
 from django.utils import timezone
-from .models import Usagereport, ReportGeneration, ENQUIRY_RATES
+from .models import Usagereport, ReportGeneration, ENQUIRY_RATES, SubscriberProductRate
 from datetime import date, timedelta, datetime
 import calendar
 import io
@@ -20,7 +20,17 @@ import os.path
 import uuid
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required
+from decimal import Decimal
 from decimal import Decimal, ROUND_HALF_UP
+import logging
+
+# Get an instance of a logger
+logger = logging.getLogger(__name__)
+
+# Function to safely populate direct assignments by checking for merged cells first
+def safe_cell_assignment(ws, row, col, value):
+    """Helper function to safely assign values to cells, handling merged cells."""
+    write_to_cell(ws, row, col, value)
 
 def write_to_cell(ws, row, col, value):
     """
@@ -206,7 +216,7 @@ def single_report(request):
             
             # Log the date processing for debugging
             print(f"Date processing: {start_date_str} -> {start_date} -> {start_date_display}")
-            # print(f"Date processing: {end_date_str} -> {end_date} -> {end_date_display}")
+            print(f"Date processing: {end_date_str} -> {end_date} -> {end_date_display}")
         except (ValueError, TypeError) as e:
             messages.error(request, f"Invalid date format: {str(e)}")
             return render(request, 'bulkrep/single_report.html', context)
@@ -240,33 +250,15 @@ def single_report(request):
             summary_bills['consumer_snap_check'] = queryset.filter(ProductName__icontains='Snap Check').count()
             summary_bills['consumer_basic_trace'] = queryset.filter(ProductName__icontains='Basic Trace').count()
             summary_bills['consumer_basic_credit'] = queryset.filter(ProductName__icontains='Basic Credit').count()
-            summary_bills['consumer_detailed_credit'] = queryset.filter(
-                ProductName__icontains='Detailed Credit'
-            ).exclude(ProductName__icontains='X-SCore').count()
-            summary_bills['xscore_consumer_credit'] = queryset.filter(
-                ProductName__icontains='X-SCore Consumer Detailed Credit'
-            ).count()
-            summary_bills['commercial_basic_trace'] = queryset.filter(
-                ProductName__icontains='Commercial Basic Trace'
-            ).count()
-            summary_bills['commercial_detailed_credit'] = queryset.filter(
-                ProductName__icontains='Commercial detailed Credit'
-            ).count()
-            summary_bills['enquiry_report'] = queryset.filter(
-                ProductName__icontains='Enquiry Report'
-            ).count()
-            summary_bills['consumer_dud_cheque'] = queryset.filter(
-                ProductName__icontains='Consumer Dud Cheque'
-            ).count()
-            summary_bills['commercial_dud_cheque'] = queryset.filter(
-                ProductName__icontains='Commercial Dud Cheque'
-            ).count()
-            summary_bills['director_basic_report'] = queryset.filter(
-                ProductName__icontains='Director Basic Report'
-            ).count()
-            summary_bills['director_detailed_report'] = queryset.filter(
-                ProductName__icontains='Director Detailed Report'
-            ).count()
+            summary_bills['consumer_detailed_credit'] = queryset.filter(ProductName__icontains='Detailed Credit').exclude(ProductName__icontains='X-SCore').count()
+            summary_bills['xscore_consumer_credit'] = queryset.filter(ProductName__icontains='X-SCore Consumer Detailed Credit').count()
+            summary_bills['commercial_basic_trace'] = queryset.filter(ProductName__icontains='Commercial Basic Trace').count()
+            summary_bills['commercial_detailed_credit'] = queryset.filter(ProductName__icontains='Commercial detailed Credit').count()
+            summary_bills['enquiry_report'] = queryset.filter(ProductName__icontains='Enquiry Report').count()
+            summary_bills['consumer_dud_cheque'] = queryset.filter(ProductName__icontains='Consumer Dud Cheque').count()
+            summary_bills['commercial_dud_cheque'] = queryset.filter(ProductName__icontains='Commercial Dud Cheque').count()
+            summary_bills['director_basic_report'] = queryset.filter(ProductName__icontains='Director Basic Report').count()
+            summary_bills['director_detailed_report'] = queryset.filter(ProductName__icontains='Director Detailed Report').count()
         else:
             summary_bills = {}
 
@@ -304,15 +296,23 @@ def single_report(request):
             buffer = io.BytesIO()
             wb = openpyxl.load_workbook(template_path)
             ws = wb.active
-            
-            
+        except Exception as e:
+            logger.error(f"Error loading Excel template: {str(e)}")
+            messages.error(request, f"Error loading Excel template: {str(e)}")
+            return render(request, 'bulkrep/single_report.html', context)
+        try:
             # Look for "Productname" cell to identify where to put the dynamic product name
             product_name_cell = None
             for row in range(30, 35):  # Search rows 30-34
                 for col in range(1, 10):  # Search columns A-I
                     cell_value = ws.cell(row=row, column=col).value
                     if cell_value and "product" in str(cell_value).lower():
-                        product_name_cell = (row, col)
+                        try:
+                            product_name_cell = (row, col)
+                        except Exception as e:
+                            logger.error(f"Error finding product name cell: {str(e)}")
+                            messages.error(request, f"Error finding product name cell: {str(e)}")
+                            return render(request, 'bulkrep/single_report.html', context)
                         break
                 if product_name_cell:
                     break
@@ -382,68 +382,388 @@ def single_report(request):
                 safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)  # I26
                 
                 # Set rates in column M (13) - merged from M to O with Naira formatting
-                safe_cell_assignment(ws, 12, 13, f"₦{ENQUIRY_RATES['consumer_snap_check']:,.2f}")  # M12
-                safe_cell_assignment(ws, 13, 13, f"₦{ENQUIRY_RATES['consumer_basic_trace']:,.2f}")  # M13
-                safe_cell_assignment(ws, 14, 13, f"₦{ENQUIRY_RATES['consumer_basic_credit']:,.2f}")  # M14
-                safe_cell_assignment(ws, 15, 13, f"₦{ENQUIRY_RATES['consumer_detailed_credit']:,.2f}")  # M15
-                safe_cell_assignment(ws, 16, 13, f"₦{ENQUIRY_RATES['xscore_consumer_credit']:,.2f}")  # M16
-                safe_cell_assignment(ws, 17, 13, f"₦{ENQUIRY_RATES['commercial_basic_trace']:,.2f}")  # M17
-                safe_cell_assignment(ws, 18, 13, f"₦{ENQUIRY_RATES['commercial_detailed_credit']:,.2f}")  # M18
-                safe_cell_assignment(ws, 20, 13, f"₦{ENQUIRY_RATES['enquiry_report']:,.2f}")  # M20
-                safe_cell_assignment(ws, 22, 13, f"₦{ENQUIRY_RATES['consumer_dud_cheque']:,.2f}")  # M22
-                safe_cell_assignment(ws, 23, 13, f"₦{ENQUIRY_RATES['commercial_dud_cheque']:,.2f}")  # M23
-                safe_cell_assignment(ws, 25, 13, f"₦{ENQUIRY_RATES['director_basic_report']:,.2f}")  # M25
-                safe_cell_assignment(ws, 26, 13, f"₦{ENQUIRY_RATES['director_detailed_report']:,.2f}")  # M26
+                # Check for custom subscriber rates with fallback to ENQUIRY_RATES
                 
-                # Calculate and set amounts in column P (16) - merged from P to Q
+                # Consumer Snap Check (row 12)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Snap Check'
+                    ).first()
+                    
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                except Exception as e:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                safe_cell_assignment(ws, 12, 13, f"₦{custom_rate:,.2f}")  # M12
+                
+                # Consumer Basic Trace (row 13)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Basic Trace'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                safe_cell_assignment(ws, 13, 13, f"₦{custom_rate:,.2f}")  # M13
+                
+                # Consumer Basic Credit (row 14)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Basic Credit'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                safe_cell_assignment(ws, 14, 13, f"₦{custom_rate:,.2f}")  # M14
+                
+                # Consumer Detailed Credit (row 15)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Detailed Credit'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                safe_cell_assignment(ws, 15, 13, f"₦{custom_rate:,.2f}")  # M15
+                
+                # X-Score Consumer Credit (row 16)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='X-Score Consumer Detailed Credit'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                safe_cell_assignment(ws, 16, 13, f"₦{custom_rate:,.2f}")  # M16
+                
+                # Commercial Basic Trace (row 17)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Basic Trace'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                safe_cell_assignment(ws, 17, 13, f"₦{custom_rate:,.2f}")  # M17
+                
+                # Commercial Detailed Credit (row 18)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Detailed Credit'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                safe_cell_assignment(ws, 18, 13, f"₦{custom_rate:,.2f}")  # M18
+                
+                # Enquiry Report (row 20)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Enquiry Report'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                safe_cell_assignment(ws, 20, 13, f"₦{custom_rate:,.2f}")  # M20
+                
+                # Consumer Dud Cheque (row 22)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Dud Cheque'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                safe_cell_assignment(ws, 22, 13, f"₦{custom_rate:,.2f}")  # M22
+                
+                # Commercial Dud Cheque (row 23)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Dud Cheque'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                safe_cell_assignment(ws, 23, 13, f"₦{custom_rate:,.2f}")  # M23
+                
+                # Director Basic Report (row 25)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Director Basic Report'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                safe_cell_assignment(ws, 25, 13, f"₦{custom_rate:,.2f}")  # M25
+                
+                # Director Detailed Report (row 26)
+                try:
+                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Director Detailed Report'
+                    ).first()
+                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                    else:
+                        custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                safe_cell_assignment(ws, 26, 13, f"₦{custom_rate:,.2f}")  # M26
+                               # Calculate and set amounts in column P (16) - merged from P to Q
                 total_amount = 0
                 
+                # Store custom rates in a dictionary for easier reference
+                custom_rates = {}
+                
                 # Calculate amounts (quantity × rate) and populate column P with Naira formatting
-                consumer_snap_amount = (summary_bills.get('consumer_snap_check', 0) or 0) * ENQUIRY_RATES['consumer_snap_check']
+                # Use the custom rates we already looked up, not the default ENQUIRY_RATES
+                
+                # Consumer Snap Check
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Snap Check'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['consumer_snap_check'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Snap Check: {custom_rates['consumer_snap_check']}")
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                    logger.debug(f"Using default rate for Consumer Snap Check: {custom_rates['consumer_snap_check']}")
+                
+                consumer_snap_amount = Decimal(str(summary_bills.get('consumer_snap_check', 0) or 0)) * custom_rates['consumer_snap_check']
                 safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
                 total_amount += consumer_snap_amount
                 
-                consumer_basic_trace_amount = (summary_bills.get('consumer_basic_trace', 0) or 0) * ENQUIRY_RATES['consumer_basic_trace']
+                # Consumer Basic Trace
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Basic Trace'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['consumer_basic_trace'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                
+                consumer_basic_trace_amount = Decimal(str(summary_bills.get('consumer_basic_trace', 0) or 0)) * custom_rates['consumer_basic_trace']
                 safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
                 total_amount += consumer_basic_trace_amount
                 
-                consumer_basic_credit_amount = (summary_bills.get('consumer_basic_credit', 0) or 0) * ENQUIRY_RATES['consumer_basic_credit']
+                # Consumer Basic Credit
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Basic Credit'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['consumer_basic_credit'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                
+                consumer_basic_credit_amount = Decimal(str(summary_bills.get('consumer_basic_credit', 0) or 0)) * custom_rates['consumer_basic_credit']
                 safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
                 total_amount += consumer_basic_credit_amount
                 
-                consumer_detailed_credit_amount = (summary_bills.get('consumer_detailed_credit', 0) or 0) * ENQUIRY_RATES['consumer_detailed_credit']
+                # Consumer Detailed Credit
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Detailed Credit'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['consumer_detailed_credit'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                
+                consumer_detailed_credit_amount = Decimal(str(summary_bills.get('consumer_detailed_credit', 0) or 0)) * custom_rates['consumer_detailed_credit']
                 safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
                 total_amount += consumer_detailed_credit_amount
                 
-                xscore_consumer_amount = (summary_bills.get('xscore_consumer_credit', 0) or 0) * ENQUIRY_RATES['xscore_consumer_credit']
+                # X-Score Consumer Credit
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='X-Score Consumer Detailed Credit'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['xscore_consumer_credit'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                
+                xscore_consumer_amount = Decimal(str(summary_bills.get('xscore_consumer_credit', 0) or 0)) * custom_rates['xscore_consumer_credit']
                 safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
                 total_amount += xscore_consumer_amount
                 
-                commercial_basic_trace_amount = (summary_bills.get('commercial_basic_trace', 0) or 0) * ENQUIRY_RATES['commercial_basic_trace']
+                # Commercial Basic Trace
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Basic Trace'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['commercial_basic_trace'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                
+                commercial_basic_trace_amount = Decimal(str(summary_bills.get('commercial_basic_trace', 0) or 0)) * custom_rates['commercial_basic_trace']
                 safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
                 total_amount += commercial_basic_trace_amount
                 
-                commercial_detailed_credit_amount = (summary_bills.get('commercial_detailed_credit', 0) or 0) * ENQUIRY_RATES['commercial_detailed_credit']
+                # Commercial Detailed Credit
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Detailed Credit'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['commercial_detailed_credit'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                
+                commercial_detailed_credit_amount = Decimal(str(summary_bills.get('commercial_detailed_credit', 0) or 0)) * custom_rates['commercial_detailed_credit']
                 safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
                 total_amount += commercial_detailed_credit_amount
                 
-                enquiry_report_amount = (summary_bills.get('enquiry_report', 0) or 0) * ENQUIRY_RATES['enquiry_report']
+                # Enquiry Report
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Enquiry Report'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['enquiry_report'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                
+                enquiry_report_amount = Decimal(str(summary_bills.get('enquiry_report', 0) or 0)) * custom_rates['enquiry_report']
                 safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
                 total_amount += enquiry_report_amount
                 
-                consumer_dud_amount = (summary_bills.get('consumer_dud_cheque', 0) or 0) * ENQUIRY_RATES['consumer_dud_cheque']
+                # Consumer Dud Cheque
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Consumer Dud Cheque'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['consumer_dud_cheque'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                
+                consumer_dud_amount = Decimal(str(summary_bills.get('consumer_dud_cheque', 0) or 0)) * custom_rates['consumer_dud_cheque']
                 safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
                 total_amount += consumer_dud_amount
                 
-                commercial_dud_amount = (summary_bills.get('commercial_dud_cheque', 0) or 0) * ENQUIRY_RATES['commercial_dud_cheque']
+                # Commercial Dud Cheque
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Commercial Dud Cheque'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['commercial_dud_cheque'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                
+                commercial_dud_amount = Decimal(str(summary_bills.get('commercial_dud_cheque', 0) or 0)) * custom_rates['commercial_dud_cheque']
                 safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
                 total_amount += commercial_dud_amount
                 
-                director_basic_amount = (summary_bills.get('director_basic_report', 0) or 0) * ENQUIRY_RATES['director_basic_report']
+                # Director Basic Report
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Director Basic Report'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['director_basic_report'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                
+                director_basic_amount = Decimal(str(summary_bills.get('director_basic_report', 0) or 0)) * custom_rates['director_basic_report']
                 safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
                 total_amount += director_basic_amount
                 
-                director_detailed_amount = (summary_bills.get('director_detailed_report', 0) or 0) * ENQUIRY_RATES['director_detailed_report']
+                # Director Detailed Report
+                try:
+                    rate = SubscriberProductRate.objects.filter(
+                        subscriber_name__iexact=subscriber_id, 
+                        product_name__iexact='Director Detailed Report'
+                    ).first()
+                    if rate and hasattr(rate, 'rate'):
+                        custom_rates['director_detailed_report'] = Decimal(str(rate.rate))
+                    else:
+                        custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                except SubscriberProductRate.DoesNotExist:
+                    custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                
+                director_detailed_amount = Decimal(str(summary_bills.get('director_detailed_report', 0) or 0)) * custom_rates['director_detailed_report']
                 safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
                 total_amount += director_detailed_amount
                 
@@ -451,16 +771,14 @@ def single_report(request):
                 safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")  # P28 for total
                 
                 # Calculate 7.5% VAT amount
-                vat_amount = total_amount * 0.075
+                vat_amount = total_amount * Decimal(str(0.075))
                 safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")  # P29 for VAT amount
                 
                 # Calculate amount due (total + VAT)
                 amount_due = total_amount + vat_amount
                 safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")  # P30 for amount due
                 
-                print(f"Debug: Total amount calculated: {total_amount}")
-                print(f"Debug: VAT amount (7.5%): {vat_amount}")
-                print(f"Debug: Amount Due (Total + VAT): {amount_due}")
+
             
             if include_products:
                 start_row_offset = 36  # Initial start row for product sections on Sheet1
@@ -628,16 +946,21 @@ def single_report(request):
             # Add 'Generated by: <username>' to the first available merged O-Q row, or row 8 if none, with bold and italic formatting
             add_generated_by(ws, request.user.username, current_row_offset - 1)
 
+            # Save workbook to buffer
             wb.save(buffer)
             buffer.seek(0)
+            
+            # Generate filename and create directory if it doesn't exist
             month_year = start_date.strftime('%B%Y')
             clean_subscriber = clean_filename(subscriber_id)
             filename = f"{clean_subscriber}_{month_year}_{uuid.uuid4().hex[:8]}.xlsx"
             single_reports_dir = os.path.join(settings.MEDIA_ROOT, 'reports', 'single')
             os.makedirs(single_reports_dir, exist_ok=True)
             file_path = os.path.join(single_reports_dir, filename)
+            
+            # Write buffer contents to file using getvalue() to get entire content regardless of position
             with open(file_path, 'wb') as f:
-                f.write(buffer.read())
+                f.write(buffer.getvalue())
             download_url = settings.MEDIA_URL + f'reports/single/{filename}'
             
             # Update report generation status to success
@@ -1011,7 +1334,7 @@ PRODUCT_RATES = {
     'Director Detailed Report': Decimal('0.00'),
 }
 
-def populate_rate_and_amount(ws, start_row, end_row):
+def populate_rate_and_amount(ws, start_row, end_row, subscriber_id):
     """
     Populate rate (columns M-O) and calculate amount (columns P-Q) based on product name (column D).
     
@@ -1019,30 +1342,35 @@ def populate_rate_and_amount(ws, start_row, end_row):
         ws: Worksheet object
         start_row: First data row (1-based)
         end_row: Last data row (inclusive)
+        subscriber_id: The ID/Name of the subscriber to check for custom rates
     """
-    print(f"DEBUG: populate_rate_and_amount called with start_row={start_row}, end_row={end_row}")
-    print(f"DEBUG: First 5 product names in PRODUCT_RATES: {list(PRODUCT_RATES.keys())[:5]}")
     
     for row in range(start_row, end_row + 1):
         # Get product name from column D (4th column)
         product_cell = ws.cell(row=row, column=4)
-        product_name = str(product_cell.value).strip() if product_cell.value else ""
-        print(f"DEBUG: Row {row} - Product: '{product_name}'")
+        product_name_original = str(product_cell.value).strip() if product_cell.value else ""
+        product_name_cleaned = product_name_original
         
-        # Get rate from mapping, default to 0 if not found
-        rate = PRODUCT_RATES.get(product_name, Decimal('0.00'))
-        print(f"DEBUG:   - Rate: ₦{rate:,.2f}")
+        # Skip empty product names
+        if not product_name_cleaned:
+            continue
+            
+        # Use the safe helper function to get the rate
+        rate = get_subscriber_product_rate_safe(
+            subscriber_id=subscriber_id,
+            product_name=product_name_cleaned,
+            default_rate_map=PRODUCT_RATES,
+            default_rate_key=product_name_cleaned,
+            logger=logger
+        )
         
         # Populate rate in columns M-O (merged)
         write_to_cell(ws, row, 13, f"₦{rate:,.2f}")  # Column M
-        print(f"DEBUG:   - Wrote rate to column M")
-        
         # Calculate amount (rate * 1) since each row represents one search
         amount = rate * Decimal('1.00')
-        
         # Populate amount in columns P-Q (merged)
         write_to_cell(ws, row, 16, f"₦{amount:,.2f}")  # Column P
-        print(f"DEBUG:   - Wrote amount to column P")
+       
 
 def add_generated_by(ws, username, last_data_row=None):
     """
@@ -1068,6 +1396,89 @@ def add_generated_by(ws, username, last_data_row=None):
     return signature_row
 
 @login_required
+def get_subscriber_product_rate(subscriber_id, product_name, default_rate_key, logger):
+    """Helper function to get subscriber-specific product rate with fallback to default rate"""
+    try:
+        # Use filter().first() instead of get() to handle multiple records
+        custom_rate_obj = SubscriberProductRate.objects.filter(
+            subscriber_name__iexact=subscriber_id, 
+            product_name__iexact=product_name
+        ).first()
+        
+        if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+            # Ensure we're returning a Decimal object
+            if isinstance(custom_rate_obj.rate, Decimal):
+                rate = custom_rate_obj.rate
+            else:
+                rate = Decimal(str(custom_rate_obj.rate))
+            logger.debug(f"Using custom rate for {subscriber_id} - {product_name}: {rate}")
+            return rate
+        else:
+            raise Exception(f"No custom rate found for {product_name}")
+    except Exception:
+        # Get default rate and ensure it's a Decimal
+        default_value = ENQUIRY_RATES.get(default_rate_key, Decimal('0.00'))
+        if not isinstance(default_value, Decimal):
+            rate = Decimal(str(default_value))
+        else:
+            rate = default_value
+        logger.debug(f"Using default rate for {product_name}: {rate}")
+        return rate
+
+
+def get_subscriber_product_rate_safe(subscriber_id, product_name, default_rate_map, default_rate_key, logger=None):
+    """Safe helper function to get subscriber product rate with better error handling for multiple records.
+    
+    Args:
+        subscriber_id: The subscriber ID or name
+        product_name: The product name to look up
+        default_rate_map: Dictionary of default rates (ENQUIRY_RATES or PRODUCT_RATES)
+        default_rate_key: Key to use in the default_rate_map
+        logger: Optional logger object
+    
+    Returns:
+        Decimal rate value
+    """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        
+    try:
+        # Use filter().first() instead of get() to avoid MultipleObjectsReturned
+        rate_obj = SubscriberProductRate.objects.filter(
+            subscriber_name__iexact=subscriber_id, 
+            product_name__iexact=product_name
+        ).first()
+        
+        if rate_obj and hasattr(rate_obj, 'rate'):
+            # Ensure we're returning a Decimal object
+            if isinstance(rate_obj.rate, Decimal):
+                rate = rate_obj.rate
+            else:
+                rate = Decimal(str(rate_obj.rate))
+            logger.debug(f"Using custom rate for {subscriber_id} - {product_name}: {rate}")
+            return rate
+        else:
+            # No custom rate found, use default
+            default_value = default_rate_map.get(default_rate_key, Decimal('0.00'))
+            # Ensure default value is converted to Decimal
+            if not isinstance(default_value, Decimal):
+                rate = Decimal(str(default_value))
+            else:
+                rate = default_value
+            logger.debug(f"No custom rate found. Using default rate for {product_name}: {rate}")
+            return rate
+    except Exception as e:
+        # Handle any unexpected errors
+        logger.error(f"Error retrieving rate for {subscriber_id} - {product_name}: {e}")
+        default_value = default_rate_map.get(default_rate_key, Decimal('0.00'))
+        # Ensure default value is converted to Decimal
+        if not isinstance(default_value, Decimal):
+            rate = Decimal(str(default_value))
+        else:
+            rate = default_value
+        logger.debug(f"Using default rate after error: {rate}")
+        return rate
+
 def bulk_report(request):
     """View for generating bulk reports."""
     # Get the current date range (first day of current month to first day of next month)
@@ -1227,37 +1638,19 @@ def bulk_report(request):
                             summary_bills['consumer_snap_check'] = queryset.filter(ProductName__icontains='Snap Check').count()
                             summary_bills['consumer_basic_trace'] = queryset.filter(ProductName__icontains='Basic Trace').count()
                             summary_bills['consumer_basic_credit'] = queryset.filter(ProductName__icontains='Basic Credit').count()
-                            summary_bills['consumer_detailed_credit'] = queryset.filter(
-                                ProductName__icontains='Detailed Credit'
-                            ).exclude(ProductName__icontains='X-SCore').count()
-                            summary_bills['xscore_consumer_credit'] = queryset.filter(
-                                ProductName__icontains='X-SCore Consumer Detailed Credit'
-                            ).count()
-                            summary_bills['commercial_basic_trace'] = queryset.filter(
-                                ProductName__icontains='Commercial Basic Trace'
-                            ).count()
-                            summary_bills['commercial_detailed_credit'] = queryset.filter(
-                                ProductName__icontains='Commercial detailed Credit'
-                            ).count()
-                            summary_bills['enquiry_report'] = queryset.filter(
-                                ProductName__icontains='Enquiry Report'
-                            ).count()
-                            summary_bills['consumer_dud_cheque'] = queryset.filter(
-                                ProductName__icontains='Consumer Dud Cheque'
-                            ).count()
-                            summary_bills['commercial_dud_cheque'] = queryset.filter(
-                                ProductName__icontains='Commercial Dud Cheque'
-                            ).count()
-                            summary_bills['director_basic_report'] = queryset.filter(
-                                ProductName__icontains='Director Basic Report'
-                            ).count()
-                            summary_bills['director_detailed_report'] = queryset.filter(
-                                ProductName__icontains='Director Detailed Report'
-                            ).count()
+                            summary_bills['consumer_detailed_credit'] = queryset.filter(ProductName__icontains='Detailed Credit').exclude(ProductName__icontains='X-SCore').count()
+                            summary_bills['xscore_consumer_credit'] = queryset.filter(ProductName__icontains='X-SCore Consumer Detailed Credit').count()
+                            summary_bills['commercial_basic_trace'] = queryset.filter(ProductName__icontains='Commercial Basic Trace').count()
+                            summary_bills['commercial_detailed_credit'] = queryset.filter(ProductName__icontains='Commercial detailed Credit').count()
+                            summary_bills['enquiry_report'] = queryset.filter(ProductName__icontains='Enquiry Report').count()
+                            summary_bills['consumer_dud_cheque'] = queryset.filter(ProductName__icontains='Consumer Dud Cheque').count()
+                            summary_bills['commercial_dud_cheque'] = queryset.filter(ProductName__icontains='Commercial Dud Cheque').count()
+                            summary_bills['director_basic_report'] = queryset.filter(ProductName__icontains='Director Basic Report').count()
+                            summary_bills['director_detailed_report'] = queryset.filter(ProductName__icontains='Director Detailed Report').count()
                         else:
                             summary_bills = {}
-                        
-                        # Fetch product details using Django ORM
+
+                        # Query for product details using Django ORM
                         if include_products:
                             product_data = Usagereport.objects.filter(
                                 DetailsViewedDate__gte=start_date,
@@ -1268,10 +1661,6 @@ def bulk_report(request):
                                 'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
                             )
                             
-                            # Skip if no data
-                            if not product_data.exists():
-                                continue
-                            
                             # Group by ProductName
                             product_sections = {}
                             for record in product_data:
@@ -1279,247 +1668,722 @@ def bulk_report(request):
                                 if product_name not in product_sections:
                                     product_sections[product_name] = []
                                 product_sections[product_name].append(record)
+                            
+                            product_data = list(product_data)  # Convert to list for compatibility
                         else:
                             product_sections = {}
                             product_data = []
-                        
-                        # Skip if no data for this subscriber
+
                         if not product_data and include_products:
-                            continue
-                        
-                        # Create Excel report for this subscriber
-                        excel_buffer = io.BytesIO()
-                        wb = openpyxl.load_workbook(template_path)
-                        ws = wb.active
-                        
-                        
-                        # Look for "Productname" cell to identify where to put the dynamic product name
-                        product_name_cell = None
-                        for row in range(30, 35):  # Search rows 30-34
-                            for col in range(1, 10):  # Search columns A-I
-                                cell_value = ws.cell(row=row, column=col).value
-                                if cell_value and "product" in str(cell_value).lower():
-                                    product_name_cell = (row, col)
+                            messages.warning(request, f"No data found for subscriber {subscriber_id} between {start_date_display} and {end_date_display}.")
+                            return render(request, 'bulkrep/single_report.html', context)
+
+                        # Generate Excel report
+                        try:
+                            template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
+                            excel_buffer = io.BytesIO()
+                            wb = openpyxl.load_workbook(template_path)
+                            ws = wb.active
+                        except Exception as e:
+                            logger.error(f"Error loading Excel template: {str(e)}")
+                            messages.error(request, f"Error loading Excel template: {str(e)}")
+                            return render(request, 'bulkrep/bulk_report.html', context)
+                        try:
+                            # Look for "Productname" cell to identify where to put the dynamic product name
+                            product_name_cell = None
+                            for row in range(30, 35):  # Search rows 30-34
+                                for col in range(1, 10):  # Search columns A-I
+                                    cell_value = ws.cell(row=row, column=col).value
+                                    if cell_value and "product" in str(cell_value).lower():
+                                        try:
+                                            product_name_cell = (row, col)
+                                        except Exception as e:
+                                            logger.error(f"Error finding product name cell: {str(e)}")
+                                            messages.error(request, f"Error finding product name cell: {str(e)}")
+                                            return render(request, 'bulkrep/single_report.html', context)
+                                        break
+                                if product_name_cell:
                                     break
-                            if product_name_cell:
-                                break
-                        
-                        row2_merged_range = None
-                        for merged_range in list(ws.merged_cells.ranges):
-                            if merged_range.min_row == 2 and merged_range.max_row == 2:
-                                row2_merged_range = merged_range
-                                break
-                        
-                        # If we found a merged range for row 2, unmerge it, set the value with the required format, and remerge it
-                        if row2_merged_range:
-                            merged_range_str = str(row2_merged_range)
-                            ws.unmerge_cells(merged_range_str)
-                            # Set the value to the first cell in the merged range with the required format
-                            original_cell = ws.cell(row=2, column=row2_merged_range.min_col)
-                            new_content = f"FirstCentral NIGERIA - BILLING DETAILS - {subscriber_id}"
-                            original_cell.value = new_content
                             
-                            # Remerge the cells
-                            ws.merge_cells(merged_range_str)
-                        else:
-                            # Fallback to the original method if no merged range is found
-                            safe_cell_assignment(ws, 2, 5, subscriber_id)  # E2
-                        
-                        safe_cell_assignment(ws, 5, 4, f"BILLING DETAILS - {subscriber_id}")
-                        
-                        # For row 6, which is merged from B to Q, we need to set the value to the first cell in the merged range
-                        # First, find the merged range that contains row 6
-                        row6_merged_range = None
-                        for merged_range in list(ws.merged_cells.ranges):
-                            if merged_range.min_row == 6 and merged_range.max_row == 6:
-                                row6_merged_range = merged_range
-                                break
-                        
-                        # If we found a merged range for row 6, unmerge it, set the value, and remerge it
-                        date_range_text = f"REPORT GENERATED FOR RECORDS BETWEEN {start_date_display} and {end_date_display}"
-                        if row6_merged_range:
-                            merged_range_str = str(row6_merged_range)
-                            ws.unmerge_cells(merged_range_str)
-                            # Set the value to the first cell in the merged range (column B = 2)
-                            ws.cell(row=6, column=2).value = date_range_text
-                            # Remerge the cells
-                            ws.merge_cells(merged_range_str)
-                        else:
-                            # Fallback to the original method if no merged range is found
-                            safe_cell_assignment(ws, 6, 4, date_range_text)  # D6
-                        
-                        if include_bills:
-                            # Set quantities in column I
-                            safe_cell_assignment(ws, 12, 9, summary_bills.get('consumer_snap_check', 0) or 0)
-                            safe_cell_assignment(ws, 13, 9, summary_bills.get('consumer_basic_trace', 0) or 0)
-                            safe_cell_assignment(ws, 14, 9, summary_bills.get('consumer_basic_credit', 0) or 0)
-                            safe_cell_assignment(ws, 15, 9, summary_bills.get('consumer_detailed_credit', 0) or 0)
-                            safe_cell_assignment(ws, 16, 9, summary_bills.get('xscore_consumer_credit', 0) or 0)
-                            safe_cell_assignment(ws, 17, 9, summary_bills.get('commercial_basic_trace', 0) or 0)
-                            safe_cell_assignment(ws, 18, 9, summary_bills.get('commercial_detailed_credit', 0) or 0)
-                            safe_cell_assignment(ws, 20, 9, summary_bills.get('enquiry_report', 0) or 0)
-                            safe_cell_assignment(ws, 22, 9, summary_bills.get('consumer_dud_cheque', 0) or 0)
-                            safe_cell_assignment(ws, 23, 9, summary_bills.get('commercial_dud_cheque', 0) or 0)
-                            safe_cell_assignment(ws, 25, 9, summary_bills.get('director_basic_report', 0) or 0)
-                            safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)
+                            # Write subscriber info directly to cells using the safe method
+                            # For row 2, which is merged from H to P, we need to set the value to the first cell in the merged range
+                            # First, find the merged range that contains row 2
+                            row2_merged_range = None
+                            for merged_range in list(ws.merged_cells.ranges):
+                                if merged_range.min_row == 2 and merged_range.max_row == 2:
+                                    row2_merged_range = merged_range
+                                    break
                             
-                            # Set rates in column M (13) - merged from M to O with Naira formatting
-                            safe_cell_assignment(ws, 12, 13, f"₦{ENQUIRY_RATES['consumer_snap_check']:,.2f}")  # M12
-                            safe_cell_assignment(ws, 13, 13, f"₦{ENQUIRY_RATES['consumer_basic_trace']:,.2f}")  # M13
-                            safe_cell_assignment(ws, 14, 13, f"₦{ENQUIRY_RATES['consumer_basic_credit']:,.2f}")  # M14
-                            safe_cell_assignment(ws, 15, 13, f"₦{ENQUIRY_RATES['consumer_detailed_credit']:,.2f}")  # M15
-                            safe_cell_assignment(ws, 16, 13, f"₦{ENQUIRY_RATES['xscore_consumer_credit']:,.2f}")  # M16
-                            safe_cell_assignment(ws, 17, 13, f"₦{ENQUIRY_RATES['commercial_basic_trace']:,.2f}")  # M17
-                            safe_cell_assignment(ws, 18, 13, f"₦{ENQUIRY_RATES['commercial_detailed_credit']:,.2f}")  # M18
-                            safe_cell_assignment(ws, 20, 13, f"₦{ENQUIRY_RATES['enquiry_report']:,.2f}")  # M20
-                            safe_cell_assignment(ws, 22, 13, f"₦{ENQUIRY_RATES['consumer_dud_cheque']:,.2f}")  # M22
-                            safe_cell_assignment(ws, 23, 13, f"₦{ENQUIRY_RATES['commercial_dud_cheque']:,.2f}")  # M23
-                            safe_cell_assignment(ws, 25, 13, f"₦{ENQUIRY_RATES['director_basic_report']:,.2f}")  # M25
-                            safe_cell_assignment(ws, 26, 13, f"₦{ENQUIRY_RATES['director_detailed_report']:,.2f}")  # M26
+                            # If we found a merged range for row 2, unmerge it, set the value with the required format, and remerge it
+                            if row2_merged_range:
+                                merged_range_str = str(row2_merged_range)
+                                ws.unmerge_cells(merged_range_str)
+                                # Set the value to the first cell in the merged range with the required format
+                                original_cell = ws.cell(row=2, column=row2_merged_range.min_col)
+                                new_content = f"FirstCentral NIGERIA - BILLING DETAILS - {subscriber_id}"
+                                original_cell.value = new_content
+                                
+                                # Remerge the cells
+                                ws.merge_cells(merged_range_str)
+                            else:
+                                # Fallback to the original method if no merged range is found
+                                safe_cell_assignment(ws, 2, 5, subscriber_id)  # E2
                             
-                            # Calculate and set amounts in column P (16) - merged from P to Q
-                            total_amount = 0
+                            safe_cell_assignment(ws, 5, 4, f"BILLING DETAILS - {subscriber_id}")  # D5
                             
-                            # Calculate amounts (quantity × rate) and populate column P with Naira formatting
-                            consumer_snap_amount = (summary_bills.get('consumer_snap_check', 0) or 0) * ENQUIRY_RATES['consumer_snap_check']
-                            safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
-                            total_amount += consumer_snap_amount
+                            # For row 6, which is merged from B to Q, we need to set the value to the first cell in the merged range
+                            # First, find the merged range that contains row 6
+                            row6_merged_range = None
+                            for merged_range in list(ws.merged_cells.ranges):
+                                if merged_range.min_row == 6 and merged_range.max_row == 6:
+                                    row6_merged_range = merged_range
+                                    break
                             
-                            consumer_basic_trace_amount = (summary_bills.get('consumer_basic_trace', 0) or 0) * ENQUIRY_RATES['consumer_basic_trace']
-                            safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
-                            total_amount += consumer_basic_trace_amount
+                            # If we found a merged range for row 6, unmerge it, set the value, and remerge it
+                            date_range_text = f"REPORT GENERATED FOR RECORDS BETWEEN {start_date_display} and {end_date_display}"
+                            if row6_merged_range:
+                                merged_range_str = str(row6_merged_range)
+                                ws.unmerge_cells(merged_range_str)
+                                # Set the value to the first cell in the merged range (column B = 2)
+                                ws.cell(row=6, column=2).value = date_range_text
+                                # Remerge the cells
+                                ws.merge_cells(merged_range_str)
+                            else:
+                                # Fallback to the original method if no merged range is found
+                                safe_cell_assignment(ws, 6, 4, date_range_text)  # D6
+                                
                             
-                            consumer_basic_credit_amount = (summary_bills.get('consumer_basic_credit', 0) or 0) * ENQUIRY_RATES['consumer_basic_credit']
-                            safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
-                            total_amount += consumer_basic_credit_amount
                             
-                            consumer_detailed_credit_amount = (summary_bills.get('consumer_detailed_credit', 0) or 0) * ENQUIRY_RATES['consumer_detailed_credit']
-                            safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
-                            total_amount += consumer_detailed_credit_amount
-                            
-                            xscore_consumer_amount = (summary_bills.get('xscore_consumer_credit', 0) or 0) * ENQUIRY_RATES['xscore_consumer_credit']
-                            safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
-                            total_amount += xscore_consumer_amount
-                            
-                            commercial_basic_trace_amount = (summary_bills.get('commercial_basic_trace', 0) or 0) * ENQUIRY_RATES['commercial_basic_trace']
-                            safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
-                            total_amount += commercial_basic_trace_amount
-                            
-                            commercial_detailed_credit_amount = (summary_bills.get('commercial_detailed_credit', 0) or 0) * ENQUIRY_RATES['commercial_detailed_credit']
-                            safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
-                            total_amount += commercial_detailed_credit_amount
-                            
-                            enquiry_report_amount = (summary_bills.get('enquiry_report', 0) or 0) * ENQUIRY_RATES['enquiry_report']
-                            safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
-                            total_amount += enquiry_report_amount
-                            
-                            consumer_dud_amount = (summary_bills.get('consumer_dud_cheque', 0) or 0) * ENQUIRY_RATES['consumer_dud_cheque']
-                            safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
-                            total_amount += consumer_dud_amount
-                            
-                            commercial_dud_amount = (summary_bills.get('commercial_dud_cheque', 0) or 0) * ENQUIRY_RATES['commercial_dud_cheque']
-                            safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
-                            total_amount += commercial_dud_amount
-                            
-                            director_basic_amount = (summary_bills.get('director_basic_report', 0) or 0) * ENQUIRY_RATES['director_basic_report']
-                            safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
-                            total_amount += director_basic_amount
-                            
-                            director_detailed_amount = (summary_bills.get('director_detailed_report', 0) or 0) * ENQUIRY_RATES['director_detailed_report']
-                            safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
-                            total_amount += director_detailed_amount
-                            
-                            # Set total amount with Naira formatting
-                            safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")  # P28 for total
-                            
-                            # Calculate 7.5% VAT amount
-                            vat_amount = total_amount * 0.075
-                            safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")  # P29 for VAT amount
-                            
-                            # Calculate amount due (total + VAT)
-                            amount_due = total_amount + vat_amount
-                            safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")  # P30 for amount due
-                            
-                        if include_products:
-                            row_offset = 36
-                            current_sheet = ws
-                            sheet2 = wb["Sheet2"] if "Sheet2" in wb.sheetnames else None
-                            serial_number_base = 35
+                            if include_bills:
+                                # Set quantities in column I (existing code)
+                                safe_cell_assignment(ws, 12, 9, summary_bills.get('consumer_snap_check', 0) or 0)  # I12
+                                safe_cell_assignment(ws, 13, 9, summary_bills.get('consumer_basic_trace', 0) or 0)  # I13
+                                safe_cell_assignment(ws, 14, 9, summary_bills.get('consumer_basic_credit', 0) or 0)  # I14
+                                safe_cell_assignment(ws, 15, 9, summary_bills.get('consumer_detailed_credit', 0) or 0)  # I15
+                                safe_cell_assignment(ws, 16, 9, summary_bills.get('xscore_consumer_credit', 0) or 0)  # I16
+                                safe_cell_assignment(ws, 17, 9, summary_bills.get('commercial_basic_trace', 0) or 0)  # I17
+                                safe_cell_assignment(ws, 18, 9, summary_bills.get('commercial_detailed_credit', 0) or 0)  # I18
+                                safe_cell_assignment(ws, 20, 9, summary_bills.get('enquiry_report', 0) or 0)  # I20
+                                safe_cell_assignment(ws, 22, 9, summary_bills.get('consumer_dud_cheque', 0) or 0)  # I22
+                                safe_cell_assignment(ws, 23, 9, summary_bills.get('commercial_dud_cheque', 0) or 0)  # I23
+                                safe_cell_assignment(ws, 25, 9, summary_bills.get('director_basic_report', 0) or 0)  # I25
+                                safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)  # I26
+                                
+                                # Set rates in column M (13) - merged from M to O with Naira formatting
+                                # Check for custom subscriber rates with fallback to ENQUIRY_RATES
+                                
+                                # Consumer Snap Check (row 12)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Snap Check'
+                                    ).first()
+                                    
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                        print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Snap Check: {custom_rate}")
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                                        print(f"DEBUG: Using default rate for Consumer Snap Check: {custom_rate}")
+                                except Exception as e:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                                    print(f"ERROR: {e}. Using default rate for Consumer Snap Check: {custom_rate}")
+                                safe_cell_assignment(ws, 12, 13, f"₦{custom_rate:,.2f}")  # M12
+                                
+                                # Consumer Basic Trace (row 13)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Basic Trace'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Basic Trace: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                                    print(f"DEBUG: Using default rate for Consumer Basic Trace: {custom_rate}")
+                                safe_cell_assignment(ws, 13, 13, f"₦{custom_rate:,.2f}")  # M13
+                                
+                                # Consumer Basic Credit (row 14)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Basic Credit'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Basic Credit: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                                    print(f"DEBUG: Using default rate for Consumer Basic Credit: {custom_rate}")
+                                safe_cell_assignment(ws, 14, 13, f"₦{custom_rate:,.2f}")  # M14
+                                
+                                # Consumer Detailed Credit (row 15)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Detailed Credit'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Detailed Credit: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                                    print(f"DEBUG: Using default rate for Consumer Detailed Credit: {custom_rate}")
+                                safe_cell_assignment(ws, 15, 13, f"₦{custom_rate:,.2f}")  # M15
+                                
+                                # X-Score Consumer Credit (row 16)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='X-Score Consumer Detailed Credit'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - X-Score Consumer Detailed Credit: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                                    print(f"DEBUG: Using default rate for X-Score Consumer Detailed Credit: {custom_rate}")
+                                safe_cell_assignment(ws, 16, 13, f"₦{custom_rate:,.2f}")  # M16
+                                
+                                # Commercial Basic Trace (row 17)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Basic Trace'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Basic Trace: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                                    print(f"DEBUG: Using default rate for Commercial Basic Trace: {custom_rate}")
+                                safe_cell_assignment(ws, 17, 13, f"₦{custom_rate:,.2f}")  # M17
+                                
+                                # Commercial Detailed Credit (row 18)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Detailed Credit'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Detailed Credit: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                                    print(f"DEBUG: Using default rate for Commercial Detailed Credit: {custom_rate}")
+                                safe_cell_assignment(ws, 18, 13, f"₦{custom_rate:,.2f}")  # M18
+                                
+                                # Enquiry Report (row 20)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Enquiry Report'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Enquiry Report: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                                    print(f"DEBUG: Using default rate for Enquiry Report: {custom_rate}")
+                                safe_cell_assignment(ws, 20, 13, f"₦{custom_rate:,.2f}")  # M20
+                                
+                                # Consumer Dud Cheque (row 22)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Dud Cheque'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Dud Cheque: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                                    print(f"DEBUG: Using default rate for Consumer Dud Cheque: {custom_rate}")
+                                safe_cell_assignment(ws, 22, 13, f"₦{custom_rate:,.2f}")  # M22
+                                
+                                # Commercial Dud Cheque (row 23)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Dud Cheque'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Dud Cheque: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                                    print(f"DEBUG: Using default rate for Commercial Dud Cheque: {custom_rate}")
+                                safe_cell_assignment(ws, 23, 13, f"₦{custom_rate:,.2f}")  # M23
+                                
+                                # Director Basic Report (row 25)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Director Basic Report'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Director Basic Report: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                                    print(f"DEBUG: Using default rate for Director Basic Report: {custom_rate}")
+                                safe_cell_assignment(ws, 25, 13, f"₦{custom_rate:,.2f}")  # M25
+                                
+                                # Director Detailed Report (row 26)
+                                try:
+                                    custom_rate_obj = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Director Detailed Report'
+                                    ).first()
+                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
+                                        custom_rate = Decimal(str(custom_rate_obj.rate))
+                                    else:
+                                        custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Director Detailed Report: {custom_rate}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                                    print(f"DEBUG: Using default rate for Director Detailed Report: {custom_rate}")
+                                safe_cell_assignment(ws, 26, 13, f"₦{custom_rate:,.2f}")  # M26
+                                            # Calculate and set amounts in column P (16) - merged from P to Q
+                                total_amount = 0
+                                
+                                # Store custom rates in a dictionary for easier reference
+                                custom_rates = {}
+                                
+                                # Calculate amounts (quantity × rate) and populate column P with Naira formatting
+                                # Use the custom rates we already looked up, not the default ENQUIRY_RATES
+                                
+                                # Consumer Snap Check
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Snap Check'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['consumer_snap_check'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Snap Check: {custom_rates['consumer_snap_check']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
+                                    logger.debug(f"Using default rate for Consumer Snap Check: {custom_rates['consumer_snap_check']}")
+                                
+                                consumer_snap_amount = Decimal(str(summary_bills.get('consumer_snap_check', 0) or 0)) * custom_rates['consumer_snap_check']
+                                safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
+                                total_amount += consumer_snap_amount
+                                
+                                # Consumer Basic Trace
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Basic Trace'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['consumer_basic_trace'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
+                                    logger.debug(f"Using default rate for Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
+                                
+                                consumer_basic_trace_amount = Decimal(str(summary_bills.get('consumer_basic_trace', 0) or 0)) * custom_rates['consumer_basic_trace']
+                                safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
+                                total_amount += consumer_basic_trace_amount
+                                
+                                # Consumer Basic Credit
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Basic Credit'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['consumer_basic_credit'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
+                                    logger.debug(f"Using default rate for Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
+                                
+                                consumer_basic_credit_amount = Decimal(str(summary_bills.get('consumer_basic_credit', 0) or 0)) * custom_rates['consumer_basic_credit']
+                                safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
+                                total_amount += consumer_basic_credit_amount
+                                
+                                # Consumer Detailed Credit
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Detailed Credit'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['consumer_detailed_credit'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
+                                    logger.debug(f"Using default rate for Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
+                                
+                                consumer_detailed_credit_amount = Decimal(str(summary_bills.get('consumer_detailed_credit', 0) or 0)) * custom_rates['consumer_detailed_credit']
+                                safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
+                                total_amount += consumer_detailed_credit_amount
+                                
+                                # X-Score Consumer Credit
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='X-Score Consumer Detailed Credit'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['xscore_consumer_credit'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
+                                    logger.debug(f"Using default rate for X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
+                                
+                                xscore_consumer_amount = Decimal(str(summary_bills.get('xscore_consumer_credit', 0) or 0)) * custom_rates['xscore_consumer_credit']
+                                safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
+                                total_amount += xscore_consumer_amount
+                                
+                                # Commercial Basic Trace
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Basic Trace'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['commercial_basic_trace'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
+                                    logger.debug(f"Using default rate for Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
+                                
+                                commercial_basic_trace_amount = Decimal(str(summary_bills.get('commercial_basic_trace', 0) or 0)) * custom_rates['commercial_basic_trace']
+                                safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
+                                total_amount += commercial_basic_trace_amount
+                                
+                                # Commercial Detailed Credit
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Detailed Credit'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['commercial_detailed_credit'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
+                                    logger.debug(f"Using default rate for Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
+                                
+                                commercial_detailed_credit_amount = Decimal(str(summary_bills.get('commercial_detailed_credit', 0) or 0)) * custom_rates['commercial_detailed_credit']
+                                safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
+                                total_amount += commercial_detailed_credit_amount
+                                
+                                # Enquiry Report
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Enquiry Report'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['enquiry_report'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Enquiry Report: {custom_rates['enquiry_report']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
+                                    logger.debug(f"Using default rate for Enquiry Report: {custom_rates['enquiry_report']}")
+                                
+                                enquiry_report_amount = Decimal(str(summary_bills.get('enquiry_report', 0) or 0)) * custom_rates['enquiry_report']
+                                safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
+                                total_amount += enquiry_report_amount
+                                
+                                # Consumer Dud Cheque
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Consumer Dud Cheque'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['consumer_dud_cheque'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
+                                    logger.debug(f"Using default rate for Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
+                                
+                                consumer_dud_amount = Decimal(str(summary_bills.get('consumer_dud_cheque', 0) or 0)) * custom_rates['consumer_dud_cheque']
+                                safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
+                                total_amount += consumer_dud_amount
+                                
+                                # Commercial Dud Cheque
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Commercial Dud Cheque'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['commercial_dud_cheque'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
+                                    logger.debug(f"Using default rate for Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
+                                
+                                commercial_dud_amount = Decimal(str(summary_bills.get('commercial_dud_cheque', 0) or 0)) * custom_rates['commercial_dud_cheque']
+                                safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
+                                total_amount += commercial_dud_amount
+                                
+                                # Director Basic Report
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Director Basic Report'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['director_basic_report'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Director Basic Report: {custom_rates['director_basic_report']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
+                                    logger.debug(f"Using default rate for Director Basic Report: {custom_rates['director_basic_report']}")
+                                
+                                director_basic_amount = Decimal(str(summary_bills.get('director_basic_report', 0) or 0)) * custom_rates['director_basic_report']
+                                safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
+                                total_amount += director_basic_amount
+                                
+                                # Director Detailed Report
+                                try:
+                                    rate = SubscriberProductRate.objects.filter(
+                                        subscriber_name__iexact=subscriber_id, 
+                                        product_name__iexact='Director Detailed Report'
+                                    ).first()
+                                    if rate and hasattr(rate, 'rate'):
+                                        custom_rates['director_detailed_report'] = Decimal(str(rate.rate))
+                                    else:
+                                        custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                                    logger.debug(f"Using custom rate for {subscriber_id} - Director Detailed Report: {custom_rates['director_detailed_report']}")
+                                except SubscriberProductRate.DoesNotExist:
+                                    custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
+                                    logger.debug(f"Using default rate for Director Detailed Report: {custom_rates['director_detailed_report']}")
+                                
+                                director_detailed_amount = Decimal(str(summary_bills.get('director_detailed_report', 0) or 0)) * custom_rates['director_detailed_report']
+                                safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
+                                total_amount += director_detailed_amount
+                                
+                                # Set total amount with Naira formatting
+                                safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")  # P28 for total
+                                
+                                # Calculate 7.5% VAT amount
+                                vat_amount = total_amount * Decimal(str(0.075))
+                                safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")  # P29 for VAT amount
+                                
+                                # Calculate amount due (total + VAT)
+                                amount_due = total_amount + vat_amount
+                                safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")  # P30 for amount due
+                                
 
-                            sorted_product_names = sorted(product_sections.keys())
                             
-                            # Set the first product name in the "Productname" header
-                            if sorted_product_names and product_name_cell:
-                                first_product = sorted_product_names[0]
-                                row, col = product_name_cell
-                                safe_cell_assignment(ws, row, col, first_product)
+                            if include_products:
+                                start_row_offset = 36  # Initial start row for product sections on Sheet1
+                                current_sheet = ws
+                                sheet2 = wb["Sheet2"] if "Sheet2" in wb.sheetnames else None
+                                
+                                # Sort product_sections by product_name
+                                sorted_product_names = sorted(product_sections.keys())
+                                
+                                # First, find the original product name cell in the template (rows 32-35)
+                                product_name_cell = None
+                                for row in range(32, 36):  # Rows 32-35 (inclusive)
+                                    for col in range(1, 16):  # Assuming columns A-O are important
+                                        cell_value = ws.cell(row=row, column=col).value
+                                        if cell_value and "product" in str(cell_value).lower():
+                                            product_name_cell = (row, col)
+                                            break
+                                    if product_name_cell:
+                                        break
+                                        
+                                # Save the template header structure (rows 32-35) for subsequent products
+                                header_template = []
+                                header_rows = (32, 35)  # Range of rows to copy for the header template
+                                for row in range(header_rows[0], header_rows[1] + 1):
+                                    row_data = []
+                                    for col in range(1, 16):  # Assuming columns A-O are important
+                                        cell = ws.cell(row=row, column=col)
+                                        # Store cell value and position only - we'll copy styles directly later
+                                        cell_info = {
+                                            'value': cell.value,
+                                            'position': (row, col)
+                                        }
+                                        # Check if cell is part of merged range
+                                        for m_range in ws.merged_cells.ranges:
+                                            if (row, col) == (m_range.min_row, m_range.min_col):
+                                                cell_info['merged'] = (m_range.max_row - m_range.min_row + 1, 
+                                                                    m_range.max_col - m_range.min_col + 1)
+                                                break
+                                        row_data.append(cell_info)
+                                    header_template.append(row_data)
+                                
+                                # Set data row start - will be used for first product                
+                                data_start_row = 36  # Initial start for data rows after template header
+                                lastProduct = ""
+                                
+                                # For each product, use appropriate header section
+                                for product_idx, product_name in enumerate(sorted_product_names):
+                                    product_records = product_sections[product_name]
+                                    
+                                    if product_idx == 0:
+                                        # For first product, use the existing template header
+                                        if product_name_cell:
+                                            row, col = product_name_cell
+                                            # Replace "Product Name" with actual first product name in template
+                                            safe_cell_assignment(ws, row, col, product_name)
+                                        current_sheet = ws
+                                        current_row_offset = data_start_row  # Start data at row 36
+                                        serial_number_base = data_start_row - 1
+                                    else:
+                                        # Add space between different products (extra spacing)
+                                        current_row_offset += 4  # Add significant spacing between products
+                                            
+                                        # Create new header for subsequent products
+                                        header_start_row = current_row_offset
+                                        
+                                        # Clone the header section for this product
+                                        for template_row_idx, template_row in enumerate(header_template):
+                                            target_row = header_start_row + template_row_idx
+                                        
+                                            # Ensure we're not past row limits
+                                            if current_sheet == ws and target_row > 1000000 and sheet2:
+                                                current_sheet = sheet2
+                                                # Reset for Sheet2
+                                                header_start_row = 13
+                                                target_row = header_start_row + template_row_idx
+                                        
+                                            # Unmerge any existing merged cells in the target area
+                                            for m_range in list(current_sheet.merged_cells.ranges):
+                                                if m_range.min_row <= target_row <= m_range.max_row:
+                                                    current_sheet.unmerge_cells(
+                                                        start_row=m_range.min_row, 
+                                                        start_column=m_range.min_col,
+                                                        end_row=m_range.max_row, 
+                                                        end_column=m_range.max_col
+                                                    )
+                                        
+                                            # Copy each cell from the template to the target area
+                                            for col_idx, cell_info in enumerate(template_row):
+                                                target_col = col_idx + 1
+                                                target_cell = current_sheet.cell(row=target_row, column=target_col)
+                                                
+                                                # Copy styles directly from the original cell
+                                                original_row, original_col = cell_info['position']
+                                                original_cell = ws.cell(row=original_row, column=original_col)
+                                                
+                                                # Copy cell format using openpyxl's built-in method
+                                                target_cell._style = copy(original_cell._style)
+                                                
+                                                # Set value using safe_cell_assignment to handle merged cells properly
+                                                if template_row_idx == product_name_cell[0] - header_rows[0] and \
+                                                col_idx == product_name_cell[1] - 1:
+                                                    # For the product name cell, use the safe assignment method
+                                                    safe_cell_assignment(current_sheet, target_row, target_col, product_name)
+                                                elif cell_info['value'] is not None:
+                                                    # For other cells with values, use the safe assignment method
+                                                    safe_cell_assignment(current_sheet, target_row, target_col, cell_info['value'])
+                                                
+                                                # Recreate merged cells
+                                                if 'merged' in cell_info:
+                                                    rows, cols = cell_info['merged']
+                                                    current_sheet.merge_cells(
+                                                        start_row=target_row, 
+                                                        start_column=target_col,
+                                                        end_row=target_row + rows - 1, 
+                                                        end_column=target_col + cols - 1
+                                                    )
+                                        
+                                        # Update data start row to be after this new header
+                                        current_row_offset = header_start_row + (header_rows[1] - header_rows[0] + 1)
+                                        serial_number_base = current_row_offset - 1
+                                        
+                                        # Add header for the data section
+                                        safe_cell_assignment(current_sheet, current_row_offset - 1, 4, "Unique Tracking Number")
 
-                            lastProduct = ""
-                            for product_idx, product_name in enumerate(sorted_product_names):
-                                product_records = product_sections[product_name]
-                                # Add space between different products (like VBA)
-                                if lastProduct != "" and lastProduct != product_name:
-                                    row_offset += 2
-                                # Write the Product Name header dynamically, ONE row above the details start
-                                header_row = row_offset - 1
-                                # Ensure header_row is valid (e.g., > 0)
-                                if header_row > 0:
-                                    safe_cell_assignment(current_sheet, header_row, 4, "Unique Tracking Number") # Unique Tracking Number header remains
-                                # Initialize current_row_offset for this product
-                                current_row_offset = row_offset
-                                for record_idx, record in enumerate(product_records):
-                                    current_row = current_row_offset + record_idx
-                                    if current_row > 1000000 and sheet2 and current_sheet != sheet2:
-                                        current_sheet = sheet2
-                                        row_offset = 13 
-                                        serial_number_base = 12
-                                        current_row = row_offset + record_idx
-                                    # Copy row format from template data row
-                                    template_data_row = 36
-                                    max_col = 17  # Extend to include all columns that need formatting
-                                    copy_row_format(current_sheet, template_data_row, current_row, max_col)
-                                    safe_cell_assignment(current_sheet, current_row, 2, current_row - serial_number_base)
-                                    safe_cell_assignment(current_sheet, current_row, 3, "")
-                                    safe_cell_assignment(current_sheet, current_row, 4, "")
-                                    safe_cell_assignment(current_sheet, current_row, 5, record['SubscriberName'])
-                                    safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
-                                    safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
-                                    safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
-                                    safe_cell_assignment(current_sheet, current_row, 12, record['DetailsViewedDate'])
-                                    safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
-                                    # Merge and center columns L:N and O:Q
-                                    merge_and_center_data_row(current_sheet, current_row)
-                                row_offset += len(product_records)
-                                lastProduct = product_name
-                        
-                        # Populate rate and amount columns for all data rows
-                        print(f"\nDEBUG: Before populate_rate_and_amount")
-                        print(f"DEBUG: include_products = {include_products}")
-                        print(f"DEBUG: 'current_row_offset' in locals() = {'current_row_offset' in locals()}")
-                        if 'current_row_offset' in locals():
-                            print(f"DEBUG: current_row_offset = {current_row_offset}")
-                        
-                        if include_products and 'current_row_offset' in locals() and current_row_offset > 36:
-                            # Calculate the first and last row with data (rows 36 to current_row_offset - 1)
-                            first_data_row = 36
-                            last_row = current_row_offset - 1
-                            print(f"DEBUG: Calling populate_rate_and_amount(ws, {first_data_row}, {last_row})")
-                            populate_rate_and_amount(ws, first_data_row, last_row)
-                        else:
-                            print("DEBUG: populate_rate_and_amount NOT called because:")
-                            if not include_products:
-                                print("  - include_products is False")
-                            if 'current_row_offset' not in locals():
-                                print("  - current_row_offset is not defined")
-                            elif current_row_offset <= 36:
-                                print(f"  - current_row_offset ({current_row_offset}) is not > 36")
-                        
-                        # Auto-size columns for better readability
-                        for sheet in wb.worksheets:
-                            auto_size_columns(sheet)
-                        
-                        # Add 'Generated by: <username>' to the first available merged O-Q row, or row 8 if none, with bold and italic formatting
-                        add_generated_by(ws, request.user.username, current_row_offset - 1 if 'current_row_offset' in locals() else None)
+                                    # Process data records for this product
+                                    for record_idx, record in enumerate(product_records):
+                                        current_row = current_row_offset + record_idx
+                                        
+                                        # Switch to Sheet2 when reaching max row (like VBA)
+                                        if current_row > 1000000 and sheet2 and current_sheet != sheet2:
+                                            current_sheet = sheet2
+                                            current_row_offset = 13  # Reset row offset for Sheet2 as per VBA
+                                            serial_number_base = 12  # Reset serial number base for Sheet2
+                                            current_row = current_row_offset + record_idx  # Recalculate current_row for Sheet2
+                                        
+                                        # Copy row format from template data row
+                                        template_data_row = 36
+                                        max_col = 17  # Extend to include all columns that need formatting
+                                        copy_row_format(current_sheet, template_data_row, current_row, max_col)
+                                        
+                                        # Now assign values as before
+                                        safe_cell_assignment(current_sheet, current_row, 2, current_row - serial_number_base)  # Serial Number
+                                        safe_cell_assignment(current_sheet, current_row, 3, "")  # Branch ID
+                                        safe_cell_assignment(current_sheet, current_row, 4, "")  # Unique Tracking Number column left blank
+                                        safe_cell_assignment(current_sheet, current_row, 5, record['SubscriberName'])
+                                        safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
+                                        safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
+                                        safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
+                                        safe_cell_assignment(current_sheet, current_row, 12, record['DetailsViewedDate'])
+                                        safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
+                                        
+                                        # Apply merge and center formatting to this data row
+                                        merge_and_center_data_row(current_sheet, current_row)
+                                    
+                                    # Move offset to after this product's data for next product
+                                    current_row_offset += len(product_records)
+                                    
+                                    # Set lastProduct for the next iteration
+                                    lastProduct = product_name
+
+                            # Auto-size columns for better readability
+                            for sheet in wb.worksheets:
+                                auto_size_columns(sheet)
+
+                            add_generated_by(ws, request.user.username, current_row_offset - 1)
+
+                        except Exception as e:
+                            logger.error(f"Error generating report data: {str(e)}")
+                            messages.error(request, f"Error generating report data: {str(e)}")
+                            return render(request, 'bulkrep/bulk_report.html', context)
                         
                         # Save to buffer
                         wb.save(excel_buffer)
