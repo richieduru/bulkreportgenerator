@@ -1,0 +1,1422 @@
+{% extends 'bulkrep/base.html' %} {% load static %} {% block title %}{{ title
+}}{% endblock %} {% block extra_css %}
+<style>
+  .dashboard-container {
+    padding: 20px;
+    background-color: #f8f9fa;
+    min-height: 100vh;
+  }
+
+  .dashboard-header {
+    background: white;
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 25px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  }
+
+  .metric-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 15px;
+    padding: 25px;
+    margin-bottom: 20px;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease;
+  }
+
+  .metric-card:hover {
+    transform: translateY(-5px);
+  }
+
+  .metric-card h3 {
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .metric-card.top-subscriber h3 {
+    font-size: 1.8rem;
+  }
+
+  .metric-card p {
+    font-size: 1rem;
+    margin: 0;
+    opacity: 0.9;
+  }
+
+  .chart-container {
+    background: white;
+    border-radius: 15px;
+    padding: 25px 25px 40px 25px; /* Increased bottom padding for x-axis labels */
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    margin-bottom: 35px; /* Increased margin to prevent overlap */
+    height: 450px; /* Slightly increased height */
+    overflow: hidden; /* Ensure content stays within bounds */
+    position: relative; /* For proper positioning */
+  }
+
+  .chart-container canvas {
+    max-height: 350px; /* Constrain canvas height to leave room for labels */
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  .chart-container h5 {
+    color: #333;
+    margin-bottom: 25px; /* Increased spacing */
+    font-weight: 600;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #f8f9fa; /* Visual separation */
+  }
+
+  .dashboard-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 40px;
+    border-radius: 15px;
+    margin-bottom: 30px;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  }
+
+  .dashboard-header h1 {
+    margin: 0;
+    font-size: 2.8rem;
+    font-weight: 300;
+  }
+
+  .dashboard-header p {
+    margin: 15px 0 0 0;
+    font-size: 1.2rem;
+    opacity: 0.9;
+  }
+
+  .controls-section {
+    background: white;
+    border-radius: 15px;
+    padding: 20px;
+    margin-bottom: 25px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  }
+
+  .loading-overlay {
+    position: absolute; /* Changed from fixed to absolute */
+    top: 10px; /* Position from the top of its container */
+    left: 50%; /* Center horizontally */
+    transform: translateX(-50%); /* Adjust for centering */
+    width: auto; /* Adjust width to content */
+    height: auto; /* Adjust height to content */
+    padding: 10px 20px; /* Add some padding */
+    background: rgba(255, 255, 255, 0.95); /* Slightly more opaque */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    font-size: 1rem; /* Smaller font */
+    color: #667eea;
+    border-radius: 8px; /* Rounded corners */
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1); /* Add a subtle shadow */
+  }
+
+  .loading-overlay.hidden {
+    display: none;
+  }
+
+  .btn-refresh {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+  }
+
+  .btn-refresh:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    color: white;
+  }
+
+  .time-range-select {
+    border-radius: 8px;
+    border: 2px solid #e9ecef;
+    padding: 10px 15px;
+  }
+
+  .time-range-select:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+  }
+
+  @media (max-width: 768px) {
+    .dashboard-container {
+      padding: 10px;
+    }
+
+    .dashboard-header {
+      padding: 20px;
+    }
+
+    .dashboard-header h1 {
+      font-size: 2.2rem;
+    }
+
+    .chart-container {
+      height: 350px;
+      padding: 20px 15px 35px 15px;
+      margin-bottom: 25px;
+    }
+
+    .chart-container canvas {
+      max-height: 250px;
+    }
+
+    .metric-card {
+      padding: 20px;
+    }
+  }
+</style>
+{% endblock %} {% block content %}
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="text-center">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+    <div class="mt-2">Loading dashboard data...</div>
+  </div>
+</div>
+
+<div class="dashboard-container">
+  <div class="dashboard-header">
+    <h1>{{ title }}</h1>
+    <p>Real-time analytics and insights for subscriber usage patterns</p>
+  </div>
+
+  <div class="controls-section">
+    <div class="row align-items-center">
+      <div class="col-md-8">
+        <div class="d-flex gap-3 align-items-center flex-wrap">
+          <label class="form-label mb-0 fw-bold">Date Range:</label>
+
+          <!-- Preset Date Range Dropdown -->
+          <select id="datePreset" class="form-select" style="width: 200px">
+            <option value="custom">Custom Range</option>
+            <option value="alltime">All Time</option>
+          </select>
+
+          <!-- Custom Date Inputs -->
+          <div class="d-flex gap-2 align-items-center" id="customDateInputs">
+            <div class="input-group" style="width: 150px">
+              <input type="date" id="startDate" class="form-control" />
+              <span class="input-group-text"
+                ><i class="fas fa-calendar"></i
+              ></span>
+            </div>
+            <span class="text-muted">to</span>
+            <div class="input-group" style="width: 150px">
+              <input type="date" id="endDate" class="form-control" />
+              <span class="input-group-text"
+                ><i class="fas fa-calendar"></i
+              ></span>
+            </div>
+          </div>
+
+          <button id="refreshBtn" class="btn btn-refresh">
+            <i class="fas fa-sync-alt me-1"></i> Refresh
+          </button>
+        </div>
+
+        <!-- Display Current Range -->
+        <div class="mt-2">
+          <small class="text-info">
+            <i class="fas fa-info-circle me-1"></i>
+            Showing data from <span id="currentDateRange">-</span>
+          </small>
+        </div>
+      </div>
+      <div class="col-md-4 text-end">
+        <small class="text-muted"
+          >Last updated: <span id="lastUpdated">-</span></small
+        >
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Filters -->
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="controls-section">
+        <div class="row align-items-center">
+          <div class="col-md-6">
+            <div class="d-flex gap-3 align-items-center">
+              <div>
+                <label for="globalSubscriberFilter" class="form-label mb-1"
+                  >Filter by Subscriber:</label
+                >
+                <select id="globalSubscriberFilter" class="form-select">
+                  <option value="all">All Subscribers</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-6 text-end">
+            <button id="resetFiltersBtn" class="btn btn-outline-secondary">
+              <i class="fas fa-undo me-1"></i> Reset Filters
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metrics Cards -->
+  <div class="row mb-4">
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <h3 id="totalSubscribers">-</h3>
+        <p><i class="fas fa-users me-1"></i>Total Subscribers</p>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <h3 id="totalUsage">-</h3>
+        <p><i class="fas fa-chart-bar me-1"></i>Total Usage Entries</p>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <h3 id="totalRevenue">-</h3>
+        <p><i class="fas fa-naira-sign me-1"></i>Total Revenue</p>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card top-subscriber">
+        <h3 id="topSubscriber">-</h3>
+        <p><i class="fas fa-crown me-1"></i>Top Subscriber</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Additional Metrics Row -->
+  <div class="row mb-4">
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card">
+        <h3 id="retentionRate">-</h3>
+        <p><i class="fas fa-heart me-1"></i>Retention Rate</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 1 -->
+  <div class="row mb-4">
+    <div class="col-lg-8">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5><i class="fas fa-chart-line me-2"></i>Usage Trends Over Time</h5>
+          <div class="d-flex gap-2">
+            <select
+              id="usageTrendsTimeFilter"
+              class="form-select form-select-sm"
+              style="width: 150px"
+            >
+              <option value="7">Last 7 days</option>
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">Last year</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="usageTrendsChart"></canvas>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5><i class="fas fa-trophy me-2"></i>Top Products</h5>
+          <div class="d-flex gap-2">
+            <select
+              id="topProductsFilter"
+              class="form-select form-select-sm"
+              style="width: 120px"
+            >
+              <option value="all">All Products</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="topProductsChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 2 -->
+  <div class="row mb-4">
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5>
+            <i class="fas fa-user-friends me-2"></i>Top Subscribers by Usage
+          </h5>
+          <div class="d-flex gap-2">
+            <select
+              id="topSubscribersFilter"
+              class="form-select form-select-sm"
+              style="width: 140px"
+            >
+              <option value="all">All Subscribers</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="topSubscribersChart"></canvas>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5><i class="fas fa-money-bill-wave me-2"></i>Revenue by Product</h5>
+          <div class="d-flex gap-2">
+            <select
+              id="revenueProductFilter"
+              class="form-select form-select-sm"
+              style="width: 120px"
+            >
+              <option value="all">All Products</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="revenueChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 3 -->
+  <div class="row mb-4">
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5><i class="fas fa-user-plus me-2"></i>New Subscribers Trend</h5>
+          <div class="d-flex gap-2">
+            <select
+              id="newSubscribersTimeFilter"
+              class="form-select form-select-sm"
+              style="width: 150px"
+            >
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="180">Last 6 months</option>
+              <option value="365">Last year</option>
+            </select>
+          </div>
+        </div>
+        <canvas id="newSubscribersChart"></canvas>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5><i class="fas fa-user-times me-2"></i>Churn Analysis</h5>
+          <div class="d-flex gap-2">
+            <select
+              id="churnAnalysisTimeFilter"
+              class="form-select form-select-sm"
+              style="width: 150px"
+            >
+              <option value="30" selected>Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="180">Last 6 months</option>
+            </select>
+          </div>
+        </div>
+        <div class="row text-center mt-4">
+          <div class="col-4">
+            <h4 id="churnRate" class="text-danger">-</h4>
+            <p class="text-muted">Churn Rate</p>
+          </div>
+          <div class="col-4">
+            <h4 id="churnedCount" class="text-warning">-</h4>
+            <p class="text-muted">Churned Users</p>
+          </div>
+          <div class="col-4">
+            <h4 id="activeCount" class="text-success">-</h4>
+            <p class="text-muted">Active Users</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0"><i class="fas fa-bolt me-2"></i>Quick Actions</h5>
+        </div>
+        <div class="card-body p-3">
+          <a
+            href="{% url 'bulkrep:bulk_report' %}"
+            class="btn btn-primary btn-sm me-2"
+          >
+            <i class="fas fa-file-alt me-1"></i> Generate Bulk Report
+          </a>
+          <a
+            href="{% url 'bulkrep:single_report' %}"
+            class="btn btn-secondary btn-sm me-2"
+          >
+            <i class="fas fa-file me-1"></i> Generate Single Report
+          </a>
+          <a href="{% url 'admin:index' %}" class="btn btn-info btn-sm">
+            <i class="fas fa-cog me-1"></i> Admin Panel
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %} {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  class DashboardManager {
+    constructor() {
+      this.charts = {};
+      this.init();
+    }
+
+    init() {
+      this.initializeDateInputs();
+      this.loadData();
+      this.setupEventListeners();
+      // Auto-refresh every 24 hours (daily)
+      setInterval(() => this.loadData(), 86400000);
+    }
+
+    setupEventListeners() {
+      document
+        .getElementById("datePreset")
+        .addEventListener("change", () => this.handleDatePresetChange());
+      document
+        .getElementById("startDate")
+        .addEventListener("change", () => this.handleCustomDateChange());
+      document
+        .getElementById("endDate")
+        .addEventListener("change", () => this.handleCustomDateChange());
+      document
+        .getElementById("refreshBtn")
+        .addEventListener("click", () => this.loadData());
+
+      // Individual chart filter listeners
+      document
+        .getElementById("usageTrendsTimeFilter")
+        .addEventListener("change", () => this.updateUsageTrendsChart());
+      document
+        .getElementById("topProductsFilter")
+        .addEventListener("change", () => this.updateTopProductsChart());
+      document
+        .getElementById("topSubscribersFilter")
+        .addEventListener("change", () => this.updateTopSubscribersChart());
+      document
+        .getElementById("revenueProductFilter")
+        .addEventListener("change", () => this.updateRevenueChart());
+      document
+        .getElementById("newSubscribersTimeFilter")
+        .addEventListener("change", () => this.updateNewSubscribersChart());
+      document
+        .getElementById("churnAnalysisTimeFilter")
+        .addEventListener("change", () => this.updateChurnAnalysis());
+
+      // Global filter listeners
+      document
+        .getElementById("globalSubscriberFilter")
+        .addEventListener("change", () => {
+          // Update placeholder to show selected subscriber
+          const selectedValue = document.getElementById(
+            "globalSubscriberFilter"
+          ).value;
+          this.updateSubscriberFilterPlaceholder(selectedValue);
+          this.applyGlobalFilters();
+        });
+      document
+        .getElementById("resetFiltersBtn")
+        .addEventListener("click", () => this.resetGlobalFilters());
+    }
+
+    showLoading() {
+      document.getElementById("loadingOverlay").classList.remove("hidden");
+    }
+
+    hideLoading() {
+      document.getElementById("loadingOverlay").classList.add("hidden");
+    }
+
+    async loadData() {
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+
+      // Get global filter values
+      const subscriberFilter =
+        document.getElementById("globalSubscriberFilter")?.value || "all";
+
+      this.showLoading();
+
+      try {
+        // Build query parameters
+        const params = new URLSearchParams();
+
+        if (startDate) {
+          params.append("start_date", startDate);
+        }
+        if (endDate) {
+          params.append("end_date", endDate);
+        }
+
+        // Add filter parameters if they're not 'all'
+        if (subscriberFilter !== "all") {
+          params.append("subscriber_filter", subscriberFilter);
+        }
+
+        const response = await fetch(`/dashboard-api/?${params.toString()}`);
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        // Validate data structure
+        if (!data || typeof data !== "object") {
+          throw new Error("Invalid data format received from server");
+        }
+
+        // Provide default values for missing data
+        const safeData = {
+          total_subscribers: data.total_subscribers || 0,
+          total_usage_entries: data.total_usage_entries || 0,
+          top_subscribers: Array.isArray(data.top_subscribers)
+            ? data.top_subscribers
+            : [],
+          top_products: Array.isArray(data.top_products)
+            ? data.top_products
+            : [],
+          revenue_data: Array.isArray(data.revenue_data)
+            ? data.revenue_data
+            : [],
+          usage_trends: Array.isArray(data.usage_trends)
+            ? data.usage_trends
+            : [],
+          new_subscribers: Array.isArray(data.new_subscribers)
+            ? data.new_subscribers
+            : [],
+          churn_data: data.churn_data || {
+            churn_rate: 0,
+            churned_count: 0,
+            current_subscribers: 0,
+          },
+          retention_rate: data.retention_rate || { retention_rate: 0 },
+          unique_products: Array.isArray(data.unique_products)
+            ? data.unique_products
+            : [],
+          unique_subscribers: Array.isArray(data.unique_subscribers)
+            ? data.unique_subscribers
+            : [],
+        };
+
+        this.updateMetrics(safeData);
+        this.updateCharts(safeData);
+        this.updateLastUpdated();
+      } catch (error) {
+        console.error("Error loading dashboard data:", error);
+
+        // Show user-friendly error message
+        const errorMessage = error.message.includes("fetch")
+          ? "Network error. Please check your connection and try again."
+          : `Error loading dashboard data: ${error.message}`;
+
+        // Update UI to show error state instead of breaking
+        document.getElementById("totalSubscribers").textContent = "Error";
+        document.getElementById("totalUsage").textContent = "Error";
+        document.getElementById("totalRevenue").textContent = "Error";
+        document.getElementById("topSubscriber").textContent = "Error";
+
+        alert(errorMessage);
+      } finally {
+        this.hideLoading();
+      }
+    }
+
+    updateMetrics(data) {
+      document.getElementById("totalSubscribers").textContent =
+        data.total_subscribers.toLocaleString();
+      document.getElementById("totalUsage").textContent =
+        data.total_usage_entries.toLocaleString();
+
+      // Calculate base revenue
+      const baseRevenue =
+        data.revenue_data && data.revenue_data.length > 0
+          ? data.revenue_data.reduce((sum, item) => sum + item.revenue, 0)
+          : 0;
+
+      // Add 7.50% VAT to get total revenue
+      const vatRate = 0.075; // 7.50%
+      const vatAmount = baseRevenue * vatRate;
+      const totalRevenue = baseRevenue + vatAmount;
+
+      document.getElementById(
+        "totalRevenue"
+      ).textContent = `₦${totalRevenue.toLocaleString()}`;
+
+      // Update top subscriber
+      const topSubscriber =
+        data.top_subscribers && data.top_subscribers.length > 0
+          ? data.top_subscribers[0].SubscriberName
+          : "N/A";
+      document.getElementById("topSubscriber").textContent =
+        topSubscriber.length > 15
+          ? topSubscriber.substring(0, 15) + "..."
+          : topSubscriber;
+
+      document.getElementById(
+        "retentionRate"
+      ).textContent = `${data.retention_rate.retention_rate}%`;
+
+      // Update churn metrics
+      document.getElementById(
+        "churnRate"
+      ).textContent = `${data.churn_data.churn_rate}%`;
+      document.getElementById("churnedCount").textContent =
+        data.churn_data.churned_count.toLocaleString();
+      document.getElementById("activeCount").textContent =
+        data.churn_data.current_subscribers.toLocaleString();
+
+      // Populate filter dropdowns
+      this.populateFilterDropdowns(data);
+      this.populateGlobalFilters(data);
+    }
+
+    updateLastUpdated() {
+      const now = new Date();
+      document.getElementById("lastUpdated").textContent =
+        now.toLocaleTimeString();
+    }
+
+    updateCharts(data) {
+      this.dashboardData = data; // Store data for filtering
+      this.createUsageTrendsChart(data.usage_trends);
+      this.createTopProductsChart(data.top_products);
+      this.createTopSubscribersChart(data.top_subscribers);
+      this.createRevenueChart(data.revenue_data);
+      this.createNewSubscribersChart(data.new_subscribers);
+    }
+
+    populateFilterDropdowns(data) {
+      // Populate product filters
+      const productFilter = document.getElementById("topProductsFilter");
+      const revenueProductFilter = document.getElementById(
+        "revenueProductFilter"
+      );
+
+      // Clear existing options except 'All'
+      productFilter.innerHTML = '<option value="all">All Products</option>';
+      revenueProductFilter.innerHTML =
+        '<option value="all">All Products</option>';
+
+      // Add product options with error checking
+      let products = [];
+      if (
+        data.top_products &&
+        Array.isArray(data.top_products) &&
+        data.top_products.length > 0
+      ) {
+        try {
+          products = [
+            ...new Set(
+              data.top_products.map((item) => {
+                // Handle different possible field names
+                return (
+                  item.ProductName ||
+                  item.product ||
+                  item.name ||
+                  "Unknown Product"
+                );
+              })
+            ),
+          ];
+        } catch (error) {
+          console.error(
+            "Error processing top_products data:",
+            error,
+            data.top_products
+          );
+          products = [];
+        }
+      }
+
+      products.forEach((product) => {
+        if (product && product !== "Unknown Product") {
+          const option1 = new Option(
+            product.length > 20 ? product.substring(0, 20) + "..." : product,
+            product
+          );
+          const option2 = new Option(
+            product.length > 20 ? product.substring(0, 20) + "..." : product,
+            product
+          );
+          productFilter.appendChild(option1);
+          revenueProductFilter.appendChild(option2);
+        }
+      });
+
+      // Populate subscriber filter
+      const subscriberFilter = document.getElementById("topSubscribersFilter");
+      subscriberFilter.innerHTML =
+        '<option value="all">All Subscribers</option>';
+
+      let subscribers = [];
+      if (
+        data.top_subscribers &&
+        Array.isArray(data.top_subscribers) &&
+        data.top_subscribers.length > 0
+      ) {
+        try {
+          subscribers = [
+            ...new Set(
+              data.top_subscribers.map((item) => {
+                // Handle different possible field names
+                return (
+                  item.SubscriberName ||
+                  item.subscriber ||
+                  item.name ||
+                  "Unknown Subscriber"
+                );
+              })
+            ),
+          ];
+        } catch (error) {
+          console.error(
+            "Error processing top_subscribers data:",
+            error,
+            data.top_subscribers
+          );
+          subscribers = [];
+        }
+      }
+      subscribers.forEach((subscriber) => {
+        if (subscriber && subscriber !== "Unknown Subscriber") {
+          const option = new Option(
+            subscriber.length > 25
+              ? subscriber.substring(0, 25) + "..."
+              : subscriber,
+            subscriber
+          );
+          subscriberFilter.appendChild(option);
+        }
+      });
+    }
+
+    // Individual chart update methods
+    updateUsageTrendsChart() {
+      if (!this.dashboardData) return;
+      const days = parseInt(
+        document.getElementById("usageTrendsTimeFilter").value
+      );
+      const filteredData = this.dashboardData.usage_trends.slice(-days);
+      this.createUsageTrendsChart(filteredData);
+    }
+
+    updateTopProductsChart() {
+      if (!this.dashboardData) return;
+      const selectedProduct =
+        document.getElementById("topProductsFilter").value;
+      let filteredData = this.dashboardData.top_products;
+
+      if (selectedProduct !== "all") {
+        filteredData = filteredData.filter(
+          (item) => item.ProductName === selectedProduct
+        );
+      }
+
+      this.createTopProductsChart(filteredData);
+    }
+
+    updateTopSubscribersChart() {
+      if (!this.dashboardData) return;
+      const selectedSubscriber = document.getElementById(
+        "topSubscribersFilter"
+      ).value;
+      let filteredData = this.dashboardData.top_subscribers;
+
+      if (selectedSubscriber !== "all") {
+        filteredData = filteredData.filter(
+          (item) => item.SubscriberName === selectedSubscriber
+        );
+      }
+
+      this.createTopSubscribersChart(filteredData);
+    }
+
+    updateRevenueChart() {
+      if (!this.dashboardData) return;
+      const selectedProduct = document.getElementById(
+        "revenueProductFilter"
+      ).value;
+      let filteredData = this.dashboardData.revenue_data;
+
+      if (selectedProduct !== "all") {
+        filteredData = filteredData.filter(
+          (item) => item.product === selectedProduct
+        );
+      }
+
+      this.createRevenueChart(filteredData);
+    }
+
+    updateNewSubscribersChart() {
+      if (!this.dashboardData) return;
+      const days = parseInt(
+        document.getElementById("newSubscribersTimeFilter").value
+      );
+      const filteredData = this.dashboardData.new_subscribers.slice(-days);
+      this.createNewSubscribersChart(filteredData);
+    }
+
+    updateChurnAnalysis() {
+      // For churn analysis, we would need to fetch new data based on the time filter
+      // For now, we'll just update the display with existing data
+      if (!this.dashboardData) return;
+      // This would typically require a new API call with the time filter
+      console.log("Churn analysis filter changed - would need API update");
+    }
+
+    populateGlobalFilters(data) {
+      // Populate global subscriber filter
+      const globalSubscriberFilter = document.getElementById(
+        "globalSubscriberFilter"
+      );
+
+      // Store current selection to maintain it
+      const currentSelection = globalSubscriberFilter.value;
+
+      globalSubscriberFilter.innerHTML =
+        '<option value="all">All Subscribers</option>';
+
+      // Use unique_subscribers instead of top_subscribers to get all subscribers
+      const allSubscribers = data.unique_subscribers || [];
+      allSubscribers.forEach((subscriber) => {
+        // Add null check to prevent TypeError
+        if (subscriber && typeof subscriber === "string") {
+          const option = new Option(
+            subscriber.length > 30
+              ? subscriber.substring(0, 30) + "..."
+              : subscriber,
+            subscriber
+          );
+          globalSubscriberFilter.appendChild(option);
+        }
+      });
+
+      // Restore previous selection if it still exists
+      if (currentSelection && currentSelection !== "all") {
+        const optionExists = Array.from(globalSubscriberFilter.options).some(
+          (option) => option.value === currentSelection
+        );
+        if (optionExists) {
+          globalSubscriberFilter.value = currentSelection;
+          // Update placeholder to show selected subscriber
+          this.updateSubscriberFilterPlaceholder(currentSelection);
+        }
+      }
+    }
+
+    updateSubscriberFilterPlaceholder(selectedValue) {
+      const globalSubscriberFilter = document.getElementById(
+        "globalSubscriberFilter"
+      );
+      const allOption = globalSubscriberFilter.querySelector(
+        'option[value="all"]'
+      );
+
+      if (selectedValue && selectedValue !== "all") {
+        // Find the selected option to get its display text
+        const selectedOption = globalSubscriberFilter.querySelector(
+          `option[value="${selectedValue}"]`
+        );
+        if (selectedOption) {
+          allOption.textContent = selectedOption.textContent;
+        }
+      } else {
+        allOption.textContent = "All Subscribers";
+      }
+    }
+
+    applyGlobalFilters() {
+      // Instead of client-side filtering, reload data from backend with filters
+      this.loadData();
+    }
+
+    resetGlobalFilters() {
+      document.getElementById("globalSubscriberFilter").value = "all";
+      // Reset placeholder to default
+      this.updateSubscriberFilterPlaceholder("all");
+      this.loadData();
+    }
+
+    resetIndividualFilters() {
+      // Reset all individual chart filters
+      document.getElementById("topProductsFilter").value = "all";
+      document.getElementById("topSubscribersFilter").value = "all";
+      document.getElementById("revenueProductFilter").value = "all";
+
+      // Reload data from backend without filters
+      this.loadData();
+    }
+
+    createUsageTrendsChart(data) {
+      const ctx = document.getElementById("usageTrendsChart").getContext("2d");
+      if (this.charts.usageTrends) this.charts.usageTrends.destroy();
+
+      this.charts.usageTrends = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: data.map((item) => new Date(item.date).toLocaleDateString()),
+          datasets: [
+            {
+              label: "Daily Usage",
+              data: data.map((item) => item.count),
+              borderColor: "#667eea",
+              backgroundColor: "rgba(102, 126, 234, 0.1)",
+              tension: 0.4,
+              fill: true,
+              pointBackgroundColor: "#667eea",
+              pointBorderColor: "#fff",
+              pointBorderWidth: 2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+            },
+            x: {
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+              ticks: {
+                maxRotation: 45,
+                minRotation: 0,
+                padding: 10,
+                font: {
+                  size: 11,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    createTopProductsChart(data) {
+      const ctx = document.getElementById("topProductsChart").getContext("2d");
+      if (this.charts.topProducts) this.charts.topProducts.destroy();
+
+      // Handle empty or invalid data
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        this.charts.topProducts = new Chart(ctx, {
+          type: "doughnut",
+          data: {
+            labels: ["No Data"],
+            datasets: [
+              {
+                data: [1],
+                backgroundColor: ["#E0E0E0"],
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { enabled: false },
+            },
+          },
+        });
+        return;
+      }
+
+      const colors = [
+        "#FF6384",
+        "#36A2EB",
+        "#FFCE56",
+        "#4BC0C0",
+        "#9966FF",
+        "#FF9F40",
+        "#FF6384",
+        "#C9CBCF",
+        "#4BC0C0",
+        "#FF6384",
+      ];
+
+      this.charts.topProducts = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: data.map((item) => {
+            const productName =
+              item.ProductName || item.product || item.name || "Unknown";
+            return productName.length > 15
+              ? productName.substring(0, 15) + "..."
+              : productName;
+          }),
+          datasets: [
+            {
+              data: data.map(
+                (item) => item.frequency || item.count || item.usage_count || 0
+              ),
+              backgroundColor: colors,
+              borderWidth: 2,
+              borderColor: "#fff",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "bottom",
+              labels: {
+                padding: 20,
+                usePointStyle: true,
+              },
+            },
+          },
+        },
+      });
+    }
+
+    createTopSubscribersChart(data) {
+      const ctx = document
+        .getElementById("topSubscribersChart")
+        .getContext("2d");
+      if (this.charts.topSubscribers) this.charts.topSubscribers.destroy();
+
+      // Handle empty or invalid data
+      if (!data || !Array.isArray(data) || data.length === 0) {
+        this.charts.topSubscribers = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: ["No Data"],
+            datasets: [
+              {
+                label: "Usage Count",
+                data: [0],
+                backgroundColor: ["#E0E0E0"],
+                borderWidth: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false },
+              tooltip: { enabled: false },
+            },
+            scales: {
+              y: { beginAtZero: true },
+              x: { display: false },
+            },
+          },
+        });
+        return;
+      }
+
+      this.charts.topSubscribers = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: data.map((item) => {
+            const subscriberName =
+              item.SubscriberName || item.subscriber || item.name || "Unknown";
+            return subscriberName.length > 20
+              ? subscriberName.substring(0, 20) + "..."
+              : subscriberName;
+          }),
+          datasets: [
+            {
+              label: "Usage Count",
+              data: data.map(
+                (item) => item.usage_count || item.count || item.frequency || 0
+              ),
+              backgroundColor: "rgba(54, 162, 235, 0.8)",
+              borderColor: "#36A2EB",
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+            },
+            x: {
+              grid: {
+                display: false,
+              },
+              ticks: {
+                maxRotation: 45,
+                minRotation: 0,
+                padding: 10,
+                font: {
+                  size: 11,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    createRevenueChart(data) {
+      const ctx = document.getElementById("revenueChart").getContext("2d");
+      if (this.charts.revenue) this.charts.revenue.destroy();
+
+      this.charts.revenue = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: data.map((item) =>
+            item.product.length > 15
+              ? item.product.substring(0, 15) + "..."
+              : item.product
+          ),
+          datasets: [
+            {
+              label: "Revenue (₦)",
+              data: data.map((item) => item.revenue),
+              backgroundColor: "rgba(75, 192, 192, 0.8)",
+              borderColor: "#4BC0C0",
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+              ticks: {
+                callback: function (value) {
+                  return "₦" + value.toLocaleString();
+                },
+              },
+            },
+            x: {
+              grid: {
+                display: false,
+              },
+              ticks: {
+                maxRotation: 45,
+                minRotation: 0,
+                padding: 10,
+                font: {
+                  size: 11,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    createNewSubscribersChart(data) {
+      const ctx = document
+        .getElementById("newSubscribersChart")
+        .getContext("2d");
+      if (this.charts.newSubscribers) this.charts.newSubscribers.destroy();
+
+      this.charts.newSubscribers = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: data.map((item) => new Date(item.date).toLocaleDateString()),
+          datasets: [
+            {
+              label: "New Subscribers",
+              data: data.map((item) => item.new_subscribers),
+              borderColor: "#9966FF",
+              backgroundColor: "rgba(153, 102, 255, 0.1)",
+              tension: 0.4,
+              fill: true,
+              pointBackgroundColor: "#9966FF",
+              pointBorderColor: "#fff",
+              pointBorderWidth: 2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+            },
+            x: {
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+            },
+          },
+        },
+      });
+    }
+
+    handleDatePresetChange() {
+      const preset = document.getElementById("datePreset").value;
+      const startDateInput = document.getElementById("startDate");
+      const endDateInput = document.getElementById("endDate");
+      const customInputs = document.getElementById("customDateInputs");
+
+      if (preset === "custom") {
+        customInputs.style.display = "flex";
+        return;
+      }
+
+      customInputs.style.display = "none";
+
+      const today = new Date();
+      let startDate, endDate;
+
+      switch (preset) {
+        case "alltime":
+          startDate = null;
+          endDate = null;
+          break;
+      }
+
+      if (startDate) {
+        startDateInput.value = startDate.toISOString().split("T")[0];
+      } else {
+        startDateInput.value = "";
+      }
+
+      if (endDate) {
+        endDateInput.value = endDate.toISOString().split("T")[0];
+      } else {
+        endDateInput.value = "";
+      }
+
+      this.updateCurrentDateRangeDisplay();
+      this.loadData();
+    }
+
+    handleCustomDateChange() {
+      document.getElementById("datePreset").value = "custom";
+      document.getElementById("customDateInputs").style.display = "flex";
+      this.updateCurrentDateRangeDisplay();
+      this.loadData();
+    }
+
+    updateCurrentDateRangeDisplay() {
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+      const preset = document.getElementById("datePreset").value;
+      const display = document.getElementById("currentDateRange");
+
+      if (preset === "alltime") {
+        display.textContent = "All available data";
+      } else if (startDate && endDate) {
+        const start = new Date(startDate).toLocaleDateString();
+        const end = new Date(endDate).toLocaleDateString();
+        display.textContent = `${start} to ${end}`;
+      } else if (startDate) {
+        display.textContent = `From ${new Date(
+          startDate
+        ).toLocaleDateString()}`;
+      } else if (endDate) {
+        display.textContent = `Until ${new Date(endDate).toLocaleDateString()}`;
+      } else {
+        display.textContent = "No date range selected";
+      }
+    }
+
+    initializeDateInputs() {
+      // Set default to current month (1st to 1st of next month) - same as single report
+      const today = new Date();
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth(); // 0-indexed
+
+      // Start date: first day of the current month
+      const startDateObj = new Date(currentYear, currentMonth, 1);
+      
+      // End date: first day of the next month
+      // The Date constructor handles month overflow automatically (e.g., month 11 (Dec) + 1 = month 12 -> Jan of next year)
+      const endDateObj = new Date(currentYear, currentMonth + 1, 1);
+
+      // Helper function to format date as YYYY-MM-DD using local date components
+      function formatDateToYYYYMMDD(date) {
+          const year = date.getFullYear();
+          const month = (date.getMonth() + 1).toString().padStart(2, '0'); // getMonth is 0-indexed, +1 for actual month number
+          const day = date.getDate().toString().padStart(2, '0');
+          return `${year}-${month}-${day}`;
+      }
+
+      const formattedStartDate = formatDateToYYYYMMDD(startDateObj);
+      const formattedEndDate = formatDateToYYYYMMDD(endDateObj);
+      
+      console.log('Setting dates (local):', formattedStartDate, 'to', formattedEndDate);
+      
+      document.getElementById("startDate").value = formattedStartDate;
+      document.getElementById("endDate").value = formattedEndDate;
+      document.getElementById("datePreset").value = "custom";
+      document.getElementById("customDateInputs").style.display = "flex";
+
+      this.updateCurrentDateRangeDisplay();
+    }
+  }
+
+  // Initialize dashboard when page loads
+  document.addEventListener("DOMContentLoaded", () => {
+    new DashboardManager();
+  });
+</script>
+{% endblock %}

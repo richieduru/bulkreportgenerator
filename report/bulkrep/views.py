@@ -1,9 +1,10 @@
 from django.shortcuts import render
 from django.contrib import messages
-from django.http import HttpResponse, FileResponse
-from django.db.models import Q, Count, Case, When, IntegerField, Sum
+from django.http import HttpResponse, FileResponse, JsonResponse
+from django.db.models import Q, Count, Case, When, IntegerField, Sum, Min
 from django.conf import settings
 from django.utils import timezone
+from django.shortcuts import render
 from .models import Usagereport, ReportGeneration, ENQUIRY_RATES, SubscriberProductRate
 from datetime import date, timedelta, datetime
 import calendar
@@ -23,6 +24,7 @@ from django.contrib.auth.decorators import login_required
 from decimal import Decimal
 from decimal import Decimal, ROUND_HALF_UP
 import logging
+from django.db.models import Q
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__)
@@ -927,7 +929,15 @@ def single_report(request):
                         safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
                         safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
-                        safe_cell_assignment(current_sheet, current_row, 12, record['DetailsViewedDate'])
+                        # Format DetailsViewedDate to match SubscriberEnquiryDate format
+                        details_viewed_date = record['DetailsViewedDate']
+                        if details_viewed_date:
+                            if isinstance(details_viewed_date, str):
+                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date)
+                            else:
+                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date.strftime('%Y-%m-%d'))
+                        else:
+                            safe_cell_assignment(current_sheet, current_row, 12, "")
                         safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
                         
                         # Apply merge and center formatting to this data row
@@ -1396,12 +1406,15 @@ def add_generated_by(ws, username, last_data_row=None):
     return signature_row
 
 @login_required
-def get_subscriber_product_rate(subscriber_id, product_name, default_rate_key, logger):
-    """Helper function to get subscriber-specific product rate with fallback to default rate"""
+def get_subscriber_product_rate(subscriber_name, product_name, default_rate_key, logger=None):
+    """Helper function to get subscriber product rate with better error handling."""
+    if logger is None:
+        logger = logging.getLogger(__name__)
+        
     try:
         # Use filter().first() instead of get() to handle multiple records
         custom_rate_obj = SubscriberProductRate.objects.filter(
-            subscriber_name__iexact=subscriber_id, 
+            subscriber_name__iexact=subscriber_name, 
             product_name__iexact=product_name
         ).first()
         
@@ -1411,11 +1424,11 @@ def get_subscriber_product_rate(subscriber_id, product_name, default_rate_key, l
                 rate = custom_rate_obj.rate
             else:
                 rate = Decimal(str(custom_rate_obj.rate))
-            logger.debug(f"Using custom rate for {subscriber_id} - {product_name}: {rate}")
+            logger.debug(f"Using custom rate for {subscriber_name} - {product_name}: {rate}")
             return rate
         else:
             raise Exception(f"No custom rate found for {product_name}")
-    except Exception:
+    except Exception as e:
         # Get default rate and ensure it's a Decimal
         default_value = ENQUIRY_RATES.get(default_rate_key, Decimal('0.00'))
         if not isinstance(default_value, Decimal):
@@ -1426,11 +1439,11 @@ def get_subscriber_product_rate(subscriber_id, product_name, default_rate_key, l
         return rate
 
 
-def get_subscriber_product_rate_safe(subscriber_id, product_name, default_rate_map, default_rate_key, logger=None):
+def get_subscriber_product_rate_safe(subscriber_name, product_name, default_rate_map, default_rate_key, logger=None):
     """Safe helper function to get subscriber product rate with better error handling for multiple records.
     
     Args:
-        subscriber_id: The subscriber ID or name
+        subscriber_name: The subscriber name to look up
         product_name: The product name to look up
         default_rate_map: Dictionary of default rates (ENQUIRY_RATES or PRODUCT_RATES)
         default_rate_key: Key to use in the default_rate_map
@@ -1445,7 +1458,7 @@ def get_subscriber_product_rate_safe(subscriber_id, product_name, default_rate_m
     try:
         # Use filter().first() instead of get() to avoid MultipleObjectsReturned
         rate_obj = SubscriberProductRate.objects.filter(
-            subscriber_name__iexact=subscriber_id, 
+            subscriber_name__iexact=subscriber_name, 
             product_name__iexact=product_name
         ).first()
         
@@ -1455,7 +1468,7 @@ def get_subscriber_product_rate_safe(subscriber_id, product_name, default_rate_m
                 rate = rate_obj.rate
             else:
                 rate = Decimal(str(rate_obj.rate))
-            logger.debug(f"Using custom rate for {subscriber_id} - {product_name}: {rate}")
+            logger.debug(f"Using custom rate for {subscriber_name} - {product_name}: {rate}")
             return rate
         else:
             # No custom rate found, use default
@@ -1469,7 +1482,7 @@ def get_subscriber_product_rate_safe(subscriber_id, product_name, default_rate_m
             return rate
     except Exception as e:
         # Handle any unexpected errors
-        logger.error(f"Error retrieving rate for {subscriber_id} - {product_name}: {e}")
+        logger.error(f"Error retrieving rate for {subscriber_name} - {product_name}: {e}")
         default_value = default_rate_map.get(default_rate_key, Decimal('0.00'))
         # Ensure default value is converted to Decimal
         if not isinstance(default_value, Decimal):
@@ -1491,50 +1504,47 @@ def bulk_report(request):
     else:
         first_day_next_month = date(today.year, today.month + 1, 1)
     
+    # Get unique subscriber names for the dropdown
+    subscribers = Usagereport.objects.values_list('SubscriberName', flat=True).distinct().order_by('SubscriberName')
+    
     # Initialize report generation tracking
     report_gen = None
     
-    # Initial context with date range
+    # Initial context with date range and subscribers
     context = {
         'start_date': first_day_of_month.strftime('%Y-%m-%d'),
         'end_date': first_day_next_month.strftime('%Y-%m-%d'),
+        'subscribers': [{'id': i, 'name': name} for i, name in enumerate(subscribers, 1)],
     }
     
     if request.method == 'POST':
-        generation_method = request.POST.get('generation_method')
-        subscriber_file = request.FILES.get('subscriber_file')
+        subscriber_ids = request.POST.getlist('subscribers')
         start_date_str = request.POST.get('start_date')
         end_date_str = request.POST.get('end_date')
         include_bills = request.POST.get('include_bills') == 'on'
         include_products = request.POST.get('include_products') == 'on'
+        
+        # Validate that at least one subscriber is selected
+        if not subscriber_ids:
+            messages.error(request, 'Please select at least one subscriber.')
+            return render(request, 'bulkrep/bulk_report.html', context)
+            
+        # Get the selected subscriber names
+        selected_subscribers = [subscribers[int(id)-1] for id in subscriber_ids if int(id) <= len(subscribers)]
 
         # Create report generation record at the start
         report_gen = ReportGeneration.objects.create(
             user=request.user,
-            generator=request.user.username,  # Add the generator field
+            generator=request.user.username,
             report_type='bulk',
             status='in_progress',
-            subscriber_name='Multiple Subscribers',
+            subscriber_name=f"{len(selected_subscribers)} Subscribers",
             from_date=start_date_str if start_date_str else None,
             to_date=end_date_str if end_date_str else None
         )
         print(f"Started tracking bulk report generation by {request.user.username}")
         
-        # Continue with report generation...
-    
-    # Initial context with date range
-    context = {
-        'start_date': first_day_of_month.strftime('%Y-%m-%d'),
-        'end_date': first_day_next_month.strftime('%Y-%m-%d'),
-    }
-    
-    if request.method == 'POST':
-        generation_method = request.POST.get('generation_method')
-        subscriber_file = request.FILES.get('subscriber_file')
-        start_date_str = request.POST.get('start_date')
-        end_date_str = request.POST.get('end_date')
-        include_bills = request.POST.get('include_bills') == 'on'
-        include_products = request.POST.get('include_products') == 'on'
+        # Process the form submission
 
         # Convert date strings to date objects - this is critical for display formatting later
         try:
@@ -1542,6 +1552,11 @@ def bulk_report(request):
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
             
+            # Validate date range
+            if start_date > end_date:
+                messages.error(request, 'Start date cannot be after end date.')
+                return render(request, 'bulkrep/bulk_report.html', context)
+                
             # Format the dates for display in the report (DD/MM/YYYY)
             start_date_display = start_date.strftime('%d/%m/%Y')
             end_date_display = end_date.strftime('%d/%m/%Y')
@@ -1550,54 +1565,25 @@ def bulk_report(request):
             messages.error(request, f"Invalid date format: {str(e)}")
             return render(request, 'bulkrep/bulk_report.html', context)
 
-        # Determine the list of subscribers
-        subscribers_list = []
-        if generation_method == 'file':
-            if not subscriber_file:
-                messages.error(request, "Subscriber list file is required for file upload method.")
-                return render(request, 'bulkrep/bulk_report.html', context)
+        # Get the selected subscriber names
+        subscribers_list = selected_subscribers
+        
+        # Log the selected subscribers for debugging
+        print(f"Selected subscribers: {subscribers_list}")
+        
+        # Validate that we have subscribers to process
+        if not subscribers_list:
+            messages.error(request, 'No valid subscribers selected.')
+            return render(request, 'bulkrep/bulk_report.html', context)
             
-            # Process the uploaded file
-            try:
-                # For CSV files
-                if subscriber_file.name.endswith('.csv'):
-                    import csv
-                    decoded_file = subscriber_file.read().decode('utf-8').splitlines()
-                    reader = csv.reader(decoded_file)
-                    for row in reader:
-                        if row:  # Check if row is not empty
-                            subscribers_list.append(row[0].strip())  # Assume first column contains subscriber names
-                
-                # For Excel files
-                elif subscriber_file.name.endswith(('.xlsx', '.xls')):
-                    wb = openpyxl.load_workbook(subscriber_file)
-                    ws = wb.active
-                    for row in ws.iter_rows(values_only=True):
-                        if row and row[0]:  # Check if the first cell in the row has a value
-                            subscribers_list.append(str(row[0]).strip())
-                else:
-                    messages.error(request, "Unsupported file format. Please upload a CSV or Excel file.")
-                    return render(request, 'bulkrep/bulk_report.html', context)
-                
-                # Remove duplicates and empty strings
-                subscribers_list = list(filter(None, set(subscribers_list)))
-                
-            except Exception as e:
-                messages.error(request, f"Error processing file: {str(e)}")
-                return render(request, 'bulkrep/bulk_report.html', context)
-
-        elif generation_method == 'all':
-            # Use Django ORM to get all distinct subscribers
-            subscribers_list = list(Usagereport.objects.filter(
-                DetailsViewedDate__gte=start_date,
-                DetailsViewedDate__lte=end_date
-            ).values_list('SubscriberName', flat=True).distinct())
-
+        # Remove any empty strings just in case
+        subscribers_list = list(filter(None, set(subscribers_list)))
+        
         if not subscribers_list:
             messages.warning(request, f"No subscribers found for the selected criteria between {start_date_display} and {end_date_display}.")
             return render(request, 'bulkrep/bulk_report.html', context)
 
-        # Generate reports for all subscribers using a zip file
+        # Generate reports for all selected subscribers using a zip file
         try:
             template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
             zip_buffer = io.BytesIO()
@@ -1605,9 +1591,10 @@ def bulk_report(request):
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 processed_subscribers = []
                 
-                for subscriber_id in subscribers_list:
+                for subscriber_name in subscribers_list:
                     try:
-                        # Fetch data using raw SQL - summary bills
+                        # Log which subscriber we're processing
+                        print(f"Processing subscriber: {subscriber_name}")
                         
                         # Fetch data using Django ORM
                         if include_bills:
@@ -1615,7 +1602,7 @@ def bulk_report(request):
                             queryset = Usagereport.objects.filter(
                                 DetailsViewedDate__gte=start_date,
                                 DetailsViewedDate__lte=end_date,
-                                SubscriberName=subscriber_id
+                                SubscriberName=subscriber_name
                             )
                             
                             # Initialize summary dictionary with all possible keys
@@ -1655,7 +1642,7 @@ def bulk_report(request):
                             product_data = Usagereport.objects.filter(
                                 DetailsViewedDate__gte=start_date,
                                 DetailsViewedDate__lte=end_date,
-                                SubscriberName=subscriber_id
+                                SubscriberName=subscriber_name
                             ).order_by('ProductName', 'DetailsViewedDate').values(
                                 'SubscriberName', 'SystemUser', 'SearchIdentity', 'SubscriberEnquiryDate',
                                 'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
@@ -1675,8 +1662,8 @@ def bulk_report(request):
                             product_data = []
 
                         if not product_data and include_products:
-                            messages.warning(request, f"No data found for subscriber {subscriber_id} between {start_date_display} and {end_date_display}.")
-                            return render(request, 'bulkrep/single_report.html', context)
+                            messages.warning(request, f"No data found for subscriber {subscriber_name} between {start_date_display} and {end_date_display}.")
+                            return render(request, 'bulkrep/bulk_report.html', context)
 
                         # Generate Excel report
                         try:
@@ -1720,16 +1707,16 @@ def bulk_report(request):
                                 ws.unmerge_cells(merged_range_str)
                                 # Set the value to the first cell in the merged range with the required format
                                 original_cell = ws.cell(row=2, column=row2_merged_range.min_col)
-                                new_content = f"FirstCentral NIGERIA - BILLING DETAILS - {subscriber_id}"
+                                new_content = f"FirstCentral NIGERIA - BILLING DETAILS - {subscriber_name}"
                                 original_cell.value = new_content
                                 
                                 # Remerge the cells
                                 ws.merge_cells(merged_range_str)
                             else:
                                 # Fallback to the original method if no merged range is found
-                                safe_cell_assignment(ws, 2, 5, subscriber_id)  # E2
+                                safe_cell_assignment(ws, 2, 5, subscriber_name)  # E2
                             
-                            safe_cell_assignment(ws, 5, 4, f"BILLING DETAILS - {subscriber_id}")  # D5
+                            safe_cell_assignment(ws, 5, 4, f"BILLING DETAILS - {subscriber_name}")  # D5
                             
                             # For row 6, which is merged from B to Q, we need to set the value to the first cell in the merged range
                             # First, find the merged range that contains row 6
@@ -1775,13 +1762,13 @@ def bulk_report(request):
                                 # Consumer Snap Check (row 12)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Snap Check'
                                     ).first()
                                     
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
-                                        print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Snap Check: {custom_rate}")
+                                        print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Snap Check: {custom_rate}")
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
                                         print(f"DEBUG: Using default rate for Consumer Snap Check: {custom_rate}")
@@ -1793,14 +1780,14 @@ def bulk_report(request):
                                 # Consumer Basic Trace (row 13)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Basic Trace'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Basic Trace: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Basic Trace: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
                                     print(f"DEBUG: Using default rate for Consumer Basic Trace: {custom_rate}")
@@ -1809,14 +1796,14 @@ def bulk_report(request):
                                 # Consumer Basic Credit (row 14)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Basic Credit'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Basic Credit: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Basic Credit: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
                                     print(f"DEBUG: Using default rate for Consumer Basic Credit: {custom_rate}")
@@ -1825,14 +1812,14 @@ def bulk_report(request):
                                 # Consumer Detailed Credit (row 15)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Detailed Credit'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Detailed Credit: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Detailed Credit: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
                                     print(f"DEBUG: Using default rate for Consumer Detailed Credit: {custom_rate}")
@@ -1841,14 +1828,14 @@ def bulk_report(request):
                                 # X-Score Consumer Credit (row 16)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='X-Score Consumer Detailed Credit'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - X-Score Consumer Detailed Credit: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - X-Score Consumer Detailed Credit: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
                                     print(f"DEBUG: Using default rate for X-Score Consumer Detailed Credit: {custom_rate}")
@@ -1857,14 +1844,14 @@ def bulk_report(request):
                                 # Commercial Basic Trace (row 17)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Basic Trace'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Basic Trace: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Basic Trace: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
                                     print(f"DEBUG: Using default rate for Commercial Basic Trace: {custom_rate}")
@@ -1873,14 +1860,14 @@ def bulk_report(request):
                                 # Commercial Detailed Credit (row 18)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Detailed Credit'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Detailed Credit: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Detailed Credit: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
                                     print(f"DEBUG: Using default rate for Commercial Detailed Credit: {custom_rate}")
@@ -1889,14 +1876,14 @@ def bulk_report(request):
                                 # Enquiry Report (row 20)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Enquiry Report'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Enquiry Report: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Enquiry Report: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
                                     print(f"DEBUG: Using default rate for Enquiry Report: {custom_rate}")
@@ -1905,14 +1892,14 @@ def bulk_report(request):
                                 # Consumer Dud Cheque (row 22)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Dud Cheque'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Consumer Dud Cheque: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Dud Cheque: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
                                     print(f"DEBUG: Using default rate for Consumer Dud Cheque: {custom_rate}")
@@ -1921,14 +1908,14 @@ def bulk_report(request):
                                 # Commercial Dud Cheque (row 23)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Dud Cheque'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Commercial Dud Cheque: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Dud Cheque: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
                                     print(f"DEBUG: Using default rate for Commercial Dud Cheque: {custom_rate}")
@@ -1937,14 +1924,14 @@ def bulk_report(request):
                                 # Director Basic Report (row 25)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Director Basic Report'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Director Basic Report: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Director Basic Report: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
                                     print(f"DEBUG: Using default rate for Director Basic Report: {custom_rate}")
@@ -1953,14 +1940,14 @@ def bulk_report(request):
                                 # Director Detailed Report (row 26)
                                 try:
                                     custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Director Detailed Report'
                                     ).first()
                                     if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
                                         custom_rate = Decimal(str(custom_rate_obj.rate))
                                     else:
                                         custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_id} - Director Detailed Report: {custom_rate}")
+                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Director Detailed Report: {custom_rate}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
                                     print(f"DEBUG: Using default rate for Director Detailed Report: {custom_rate}")
@@ -1977,14 +1964,14 @@ def bulk_report(request):
                                 # Consumer Snap Check
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
-                                        product_name__iexact='Consumer Snap Check'
+                                        subscriber_name__iexact=subscriber_name, 
+                                        product_name__iexact='Consumer Snap Check'      
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['consumer_snap_check'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Snap Check: {custom_rates['consumer_snap_check']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Snap Check: {custom_rates['consumer_snap_check']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
                                     logger.debug(f"Using default rate for Consumer Snap Check: {custom_rates['consumer_snap_check']}")
@@ -1996,14 +1983,14 @@ def bulk_report(request):
                                 # Consumer Basic Trace
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Basic Trace'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['consumer_basic_trace'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
                                     logger.debug(f"Using default rate for Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
@@ -2015,14 +2002,14 @@ def bulk_report(request):
                                 # Consumer Basic Credit
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Basic Credit'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['consumer_basic_credit'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
                                     logger.debug(f"Using default rate for Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
@@ -2034,14 +2021,14 @@ def bulk_report(request):
                                 # Consumer Detailed Credit
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Detailed Credit'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['consumer_detailed_credit'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
                                     logger.debug(f"Using default rate for Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
@@ -2053,14 +2040,14 @@ def bulk_report(request):
                                 # X-Score Consumer Credit
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='X-Score Consumer Detailed Credit'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['xscore_consumer_credit'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
                                     logger.debug(f"Using default rate for X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
@@ -2072,14 +2059,14 @@ def bulk_report(request):
                                 # Commercial Basic Trace
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Basic Trace'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['commercial_basic_trace'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
                                     logger.debug(f"Using default rate for Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
@@ -2091,14 +2078,14 @@ def bulk_report(request):
                                 # Commercial Detailed Credit
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Detailed Credit'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['commercial_detailed_credit'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
                                     logger.debug(f"Using default rate for Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
@@ -2110,14 +2097,14 @@ def bulk_report(request):
                                 # Enquiry Report
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Enquiry Report'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['enquiry_report'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Enquiry Report: {custom_rates['enquiry_report']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Enquiry Report: {custom_rates['enquiry_report']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
                                     logger.debug(f"Using default rate for Enquiry Report: {custom_rates['enquiry_report']}")
@@ -2129,14 +2116,14 @@ def bulk_report(request):
                                 # Consumer Dud Cheque
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Consumer Dud Cheque'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['consumer_dud_cheque'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
                                     logger.debug(f"Using default rate for Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
@@ -2148,14 +2135,14 @@ def bulk_report(request):
                                 # Commercial Dud Cheque
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Commercial Dud Cheque'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['commercial_dud_cheque'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
                                     logger.debug(f"Using default rate for Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
@@ -2167,14 +2154,14 @@ def bulk_report(request):
                                 # Director Basic Report
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Director Basic Report'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['director_basic_report'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Director Basic Report: {custom_rates['director_basic_report']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Director Basic Report: {custom_rates['director_basic_report']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
                                     logger.debug(f"Using default rate for Director Basic Report: {custom_rates['director_basic_report']}")
@@ -2186,14 +2173,14 @@ def bulk_report(request):
                                 # Director Detailed Report
                                 try:
                                     rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_id, 
+                                        subscriber_name__iexact=subscriber_name, 
                                         product_name__iexact='Director Detailed Report'
                                     ).first()
                                     if rate and hasattr(rate, 'rate'):
                                         custom_rates['director_detailed_report'] = Decimal(str(rate.rate))
                                     else:
                                         custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_id} - Director Detailed Report: {custom_rates['director_detailed_report']}")
+                                    logger.debug(f"Using custom rate for {subscriber_name} - Director Detailed Report: {custom_rates['director_detailed_report']}")
                                 except SubscriberProductRate.DoesNotExist:
                                     custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
                                     logger.debug(f"Using default rate for Director Detailed Report: {custom_rates['director_detailed_report']}")
@@ -2362,7 +2349,15 @@ def bulk_report(request):
                                         safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
                                         safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
                                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
-                                        safe_cell_assignment(current_sheet, current_row, 12, record['DetailsViewedDate'])
+                                        # Format DetailsViewedDate to match SubscriberEnquiryDate format
+                                        details_viewed_date = record['DetailsViewedDate']
+                                        if details_viewed_date:
+                                            if isinstance(details_viewed_date, str):
+                                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date)
+                                            else:
+                                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date.strftime('%Y-%m-%d'))
+                                        else:
+                                            safe_cell_assignment(current_sheet, current_row, 12, "")
                                         safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
                                         
                                         # Apply merge and center formatting to this data row
@@ -2389,20 +2384,20 @@ def bulk_report(request):
                         wb.save(excel_buffer)
                         excel_buffer.seek(0)
                         
-                        # Prepare filename
+                        # Prepare filename using the subscriber name
                         month_year = start_date.strftime('%B%Y')
-                        clean_subscriber = clean_filename(subscriber_id)
+                        clean_subscriber = clean_filename(subscriber_name)
                         filename = f"{clean_subscriber}_{month_year}.xlsx"
                         
                         # Add to zip file
                         zip_file.writestr(filename, excel_buffer.getvalue())
                         
                         # Add to processed subscribers list
-                        processed_subscribers.append(subscriber_id)
+                        processed_subscribers.append(subscriber_name)
                         
                     except Exception as e:
-                        print(f"Error processing subscriber {subscriber_id}: {str(e)}")
-                        error_msg = f"Skipped report for {subscriber_id} due to error: {str(e)}"
+                        print(f"Error processing subscriber {subscriber_name}: {str(e)}")
+                        error_msg = f"Skipped report for {subscriber_name} due to error: {str(e)}"
                         messages.warning(request, error_msg)
                         if 'report_gen' in locals() and report_gen:
                             report_gen.status = 'failed'
@@ -2441,5 +2436,832 @@ def bulk_report(request):
         except Exception as e:
             messages.error(request, f"Error generating bulk reports: {str(e)}")
             return render(request, 'bulkrep/bulk_report.html', context)
-
+    
+    # For GET requests, render the bulk report form
     return render(request, 'bulkrep/bulk_report.html', context)
+
+
+# Dashboard Views
+from django.contrib.auth.decorators import user_passes_test
+
+@login_required
+@user_passes_test(lambda u: u.is_superuser)
+def dashboard(request):
+    """Main dashboard view"""
+    context = {
+        'title': '📊 Usage Analytics Dashboard'
+    }
+    return render(request, 'bulkrep/dashboard.html', context)
+
+
+@login_required
+def dashboard_api(request):
+    """API endpoint for dashboard data with caching"""
+    from django.core.cache import cache
+    import hashlib
+    from datetime import datetime
+    
+    try:
+        # Get date range from request
+        start_date_str = request.GET.get('start_date', None)
+        end_date_str = request.GET.get('end_date', None)
+        
+        # Parse dates or use defaults
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        else:
+            # Default to first day of current month
+            today = timezone.now().date()
+            start_date = today.replace(day=1)
+            
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        else:
+            # Default to first day of next month
+            today = timezone.now().date()
+            if today.month == 12:
+                end_date = today.replace(year=today.year + 1, month=1, day=1)
+            else:
+                end_date = today.replace(month=today.month + 1, day=1)
+        
+        # Legacy support for time_range parameter
+        time_range = request.GET.get('time_range', None)
+        if time_range == 'alltime' and not start_date_str and not end_date_str:
+            start_date = Usagereport.objects.aggregate(min_date=Min('DetailsViewedDate'))['min_date']
+            if start_date is None:
+                start_date = end_date - timedelta(days=365)  # fallback to 1 year
+            end_date = timezone.now().date()
+        
+        # Get individual chart filters
+        usage_trends_days = request.GET.get('usage_trends_days')
+        product_filter = request.GET.get('product_filter')
+        subscriber_filter = request.GET.get('subscriber_filter')
+        revenue_product_filter = request.GET.get('revenue_product_filter')
+        new_subscribers_days = request.GET.get('new_subscribers_days')
+        churn_days = request.GET.get('churn_days')
+        
+        # Create cache key based on all parameters
+        cache_params = {
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date': end_date.strftime('%Y-%m-%d'),
+            'usage_trends_days': usage_trends_days or '',
+            'product_filter': product_filter or '',
+            'subscriber_filter': subscriber_filter or '',
+            'revenue_product_filter': revenue_product_filter or '',
+            'new_subscribers_days': new_subscribers_days or '',
+            'churn_days': churn_days or '',
+        }
+        
+        # Create a hash of the parameters for the cache key
+        cache_key_string = '|'.join([f"{k}:{v}" for k, v in sorted(cache_params.items())])
+        cache_key = f"dashboard_api_{hashlib.md5(cache_key_string.encode()).hexdigest()}"
+        
+        # Try to get cached data
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            return JsonResponse(cached_data)
+        
+        # Calculate all metrics with filters
+        # Determine which revenue calculation function to use based on filters
+        if subscriber_filter and revenue_product_filter:
+            # Both filters applied - use combined filtering
+            revenue_data = get_revenue_data_combined_filtered(start_date, end_date, subscriber_filter, revenue_product_filter)
+            top_products = get_top_products_by_subscriber_filtered(start_date, end_date, subscriber_filter)
+        elif subscriber_filter:
+            # Only subscriber filter applied
+            revenue_data = get_revenue_data_subscriber_filtered(start_date, end_date, subscriber_filter)
+            top_products = get_top_products_by_subscriber_filtered(start_date, end_date, subscriber_filter)
+        elif revenue_product_filter:
+            # Only product filter applied
+            revenue_data = get_revenue_data_product_filtered(start_date, end_date, revenue_product_filter)
+            top_products = get_top_products_by_frequency_filtered(start_date, end_date, product_filter)
+        else:
+            # No filters applied - use existing logic
+            revenue_data = get_revenue_data_filtered(start_date, end_date, revenue_product_filter)
+            top_products = get_top_products_by_frequency_filtered(start_date, end_date, product_filter)
+        
+        data = {
+            'total_subscribers': get_total_subscribers(subscriber_filter),
+            'total_usage_entries': get_total_usage_entries(start_date, end_date, subscriber_filter),
+            'top_subscriber': get_top_subscriber(start_date, end_date),
+            'top_subscribers': get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filter, limit=10),
+            'top_products': top_products,
+            'churn_data': get_churn_data_filtered(start_date, end_date, churn_days),
+            'usage_trends': get_usage_trends_filtered(start_date, end_date, usage_trends_days),
+            'revenue_data': revenue_data,
+            'new_subscribers': get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days),
+            'retention_rate': get_retention_rate(start_date, end_date),
+            'unique_products': get_unique_products(),
+            'unique_subscribers': get_unique_subscribers()
+        }
+        
+        # Cache the data for 5 minutes (300 seconds)
+        cache.set(cache_key, data, 300)
+        
+        return JsonResponse(data)
+    except Exception as e:
+        logger.error(f"Dashboard API error: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# Dashboard Helper Functions
+def get_total_subscribers(subscriber_filter=None):
+    """Get total number of unique subscribers, filtered by subscriber if provided"""
+    if subscriber_filter and subscriber_filter != 'all':
+        # If filtering by a specific subscriber, return 1
+        return 1
+    else:
+        # Otherwise return all unique subscribers
+        return Usagereport.objects.values('SubscriberName').distinct().count()
+
+
+def get_total_usage_entries(start_date, end_date, subscriber_filter=None):
+    """Get total usage entries for date range, filtered by subscriber if provided"""
+    query = Usagereport.objects.filter(DetailsViewedDate__range=[start_date, end_date])
+    
+    if subscriber_filter and subscriber_filter != 'all':
+        query = query.filter(SubscriberName=subscriber_filter)
+        
+    return query.count()
+
+
+def get_top_subscriber(start_date, end_date):
+    """Get the top subscriber by usage count"""
+    try:
+        top_subscriber = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date]
+        ).values('SubscriberName').annotate(
+            usage_count=Count('SearchIdentity')
+        ).order_by('-usage_count').first()
+        
+        return top_subscriber['SubscriberName'] if top_subscriber else 'N/A'
+    except Exception as e:
+        logger.error(f"Error getting top subscriber: {str(e)}")
+        return 'N/A'
+
+
+def get_unique_products():
+    """Get list of unique product names for filter dropdown"""
+    try:
+        products = Usagereport.objects.values_list('ProductName', flat=True).distinct().order_by('ProductName')
+        return [product for product in products if product]  # Filter out None/empty values
+    except Exception as e:
+        logger.error(f"Error getting unique products: {str(e)}")
+        return []
+
+
+def get_unique_subscribers():
+    """Get list of unique subscriber names for filter dropdown"""
+    try:
+        subscribers = Usagereport.objects.values_list('SubscriberName', flat=True).distinct().order_by('SubscriberName')
+        return [subscriber for subscriber in subscribers if subscriber]  # Filter out None/empty values
+    except Exception as e:
+        logger.error(f"Error getting unique subscribers: {str(e)}")
+        return []
+
+
+def get_top_subscribers_by_usage(start_date, end_date, limit=10):
+    """Get top subscribers by usage volume"""
+    return list(Usagereport.objects.filter(
+        DetailsViewedDate__range=[start_date, end_date]
+    ).values('SubscriberName').annotate(
+        usage_count=Count('SearchIdentity')
+    ).order_by('-usage_count')[:limit])
+
+
+def get_top_products_by_frequency(start_date, end_date, limit=10):
+    """Get top products by usage frequency"""
+    return list(Usagereport.objects.filter(
+        DetailsViewedDate__range=[start_date, end_date]
+    ).values('ProductName').annotate(
+        frequency=Count('SearchIdentity')
+    ).order_by('-frequency')[:limit])
+
+
+def get_churn_data(start_date, end_date):
+    """Calculate churn data"""
+    # Get subscribers from previous period
+    previous_start = start_date - timedelta(days=(end_date - start_date).days)
+    previous_end = start_date
+    
+    current_subscribers = set(Usagereport.objects.filter(
+        DetailsViewedDate__range=[start_date, end_date]
+    ).values_list('SubscriberName', flat=True).distinct())
+    
+    previous_subscribers = set(Usagereport.objects.filter(
+        DetailsViewedDate__range=[previous_start, previous_end]
+    ).values_list('SubscriberName', flat=True).distinct())
+    
+    churned_subscribers = previous_subscribers - current_subscribers
+    churn_rate = len(churned_subscribers) / len(previous_subscribers) * 100 if previous_subscribers else 0
+    
+    return {
+        'churned_count': len(churned_subscribers),
+        'churn_rate': round(churn_rate, 2),
+        'previous_subscribers': len(previous_subscribers),
+        'current_subscribers': len(current_subscribers)
+    }
+
+
+def get_usage_trends(start_date, end_date):
+    """Get daily usage trends"""
+    from django.db.models import DateField
+    from django.db.models.functions import Cast
+    
+    return list(Usagereport.objects.filter(
+        DetailsViewedDate__range=[start_date, end_date]
+    ).extra({
+        'date': "CAST(DetailsViewedDate AS DATE)"
+    }).values('date').annotate(
+        count=Count('SearchIdentity')
+    ).order_by('date'))
+
+
+def get_revenue_data(start_date, end_date):
+    """Calculate revenue data using ENQUIRY_RATES"""
+    revenue_data = []
+    
+    for product_key, rate in ENQUIRY_RATES.items():
+        # Map product keys to actual product names in database
+        product_variations = [
+            product_key.replace('_', ' '),
+            product_key.replace('_', '-'),
+            product_key.title().replace('_', ' '),
+        ]
+        
+        usage_count = 0
+        for variation in product_variations:
+            count = Usagereport.objects.filter(
+                DetailsViewedDate__range=[start_date, end_date],
+                ProductName__icontains=variation
+            ).count()
+            usage_count += count
+        
+        if usage_count > 0:
+            revenue_data.append({
+                'product': product_key.replace('_', ' ').title(),
+                'revenue': float(rate * usage_count),
+                'count': usage_count,
+                'rate': float(rate)
+            })
+    
+    return sorted(revenue_data, key=lambda x: x['revenue'], reverse=True)
+
+
+def get_new_subscribers_trend(start_date, end_date):
+    """Get new subscribers trend over time"""
+    # This is a simplified version - in reality you'd need a subscriber registration date
+    # For now, we'll use first usage date as proxy for "new" subscriber
+    
+    new_subscribers_by_date = []
+    current_date = start_date
+    
+    while current_date <= end_date:
+        # Get subscribers who first appeared on this date
+        subscribers_on_date = Usagereport.objects.filter(
+            DetailsViewedDate=current_date
+        ).values_list('SubscriberName', flat=True).distinct()
+        
+        # Check if this is their first appearance in our data
+        new_count = 0
+        for subscriber in subscribers_on_date:
+            first_usage = Usagereport.objects.filter(
+                SubscriberName=subscriber
+            ).order_by('DetailsViewedDate').first()
+            
+            if first_usage and first_usage.DetailsViewedDate == current_date:
+                new_count += 1
+        
+        new_subscribers_by_date.append({
+            'date': current_date.strftime('%Y-%m-%d'),
+            'new_subscribers': new_count
+        })
+        
+        current_date += timedelta(days=1)
+    
+    return new_subscribers_by_date
+
+
+def get_retention_rate(start_date, end_date):
+    """Calculate subscriber retention rate"""
+    # Get subscribers from previous period
+    previous_start = start_date - timedelta(days=(end_date - start_date).days)
+    previous_end = start_date
+    
+    previous_subscribers = set(Usagereport.objects.filter(
+        DetailsViewedDate__range=[previous_start, previous_end]
+    ).values_list('SubscriberName', flat=True).distinct())
+    
+    current_subscribers = set(Usagereport.objects.filter(
+        DetailsViewedDate__range=[start_date, end_date]
+    ).values_list('SubscriberName', flat=True).distinct())
+    
+    retained_subscribers = previous_subscribers.intersection(current_subscribers)
+    retention_rate = len(retained_subscribers) / len(previous_subscribers) * 100 if previous_subscribers else 0
+    
+    return {
+        'retention_rate': round(retention_rate, 2),
+        'retained_count': len(retained_subscribers),
+        'previous_count': len(previous_subscribers)
+    }
+
+
+# Filtered versions of dashboard helper functions
+def get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filter=None, limit=None):
+    """Get all subscribers by usage with optional filtering"""
+    try:
+        queryset = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date]
+        )
+        
+        # Apply subscriber filter if provided
+        if subscriber_filter and subscriber_filter != 'all':
+            queryset = queryset.filter(SubscriberName__icontains=subscriber_filter)
+        
+        all_subscribers = queryset.values('SubscriberName').annotate(
+            usage_count=Count('SearchIdentity')
+        ).order_by('-usage_count')
+        
+        # Apply limit only if specified (for backward compatibility)
+        if limit:
+            all_subscribers = all_subscribers[:limit]
+        
+        return list(all_subscribers)
+    except Exception as e:
+        logger.error(f"Error getting filtered subscribers: {str(e)}")
+        return []
+
+
+def get_top_products_by_frequency_filtered(start_date, end_date, product_filter=None, limit=10):
+    """Get top products by frequency with optional filtering"""
+    try:
+        queryset = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date]
+        )
+        
+        # Apply product filter if provided
+        if product_filter and product_filter != 'all':
+            queryset = queryset.filter(ProductName__icontains=product_filter)
+        
+        top_products = queryset.values('ProductName').annotate(
+            frequency=Count('SearchIdentity')
+        ).order_by('-frequency')[:limit]
+        
+        return list(top_products)
+    except Exception as e:
+        logger.error(f"Error getting filtered top products: {str(e)}")
+        return []
+
+
+def get_churn_data_filtered(start_date, end_date, churn_days=None):
+    """Get churn data with optional day filtering - OPTIMIZED"""
+    try:
+        from django.db.models import Exists, OuterRef
+        
+        # Use custom days if provided, otherwise use default logic
+        if churn_days and churn_days.isdigit():
+            days = int(churn_days)
+            analysis_start = end_date - timedelta(days=days)
+            previous_start = analysis_start - timedelta(days=days)
+            previous_end = analysis_start
+        else:
+            # Use original logic
+            analysis_start = start_date
+            previous_start = start_date - timedelta(days=(end_date - start_date).days)
+            previous_end = start_date
+        
+        # Get previous subscribers count
+        previous_subscribers_count = Usagereport.objects.filter(
+            DetailsViewedDate__range=[previous_start, previous_end]
+        ).values('SubscriberName').distinct().count()
+        
+        # Get current subscribers count
+        current_subscribers_count = Usagereport.objects.filter(
+            DetailsViewedDate__range=[analysis_start, end_date]
+        ).values('SubscriberName').distinct().count()
+        
+        # Get churned subscribers count using database subquery
+        churned_count = Usagereport.objects.filter(
+            DetailsViewedDate__range=[previous_start, previous_end]
+        ).values('SubscriberName').distinct().exclude(
+            SubscriberName__in=Usagereport.objects.filter(
+                DetailsViewedDate__range=[analysis_start, end_date]
+            ).values('SubscriberName').distinct()
+        ).count()
+        
+        churn_rate = churned_count / previous_subscribers_count * 100 if previous_subscribers_count else 0
+        
+        return {
+            'churned_count': churned_count,
+            'churn_rate': round(churn_rate, 2),
+            'previous_subscribers': previous_subscribers_count,
+            'current_subscribers': current_subscribers_count
+        }
+    except Exception as e:
+        logger.error(f"Error getting filtered churn data: {str(e)}")
+        return {'churned_count': 0, 'churn_rate': 0, 'previous_subscribers': 0, 'current_subscribers': 0}
+
+
+def get_usage_trends_filtered(start_date, end_date, usage_trends_days=None):
+    """Get usage trends with optional day filtering"""
+    try:
+        # Use custom days if provided, otherwise use the full range
+        if usage_trends_days and usage_trends_days.isdigit():
+            days = int(usage_trends_days)
+            trends_start = end_date - timedelta(days=days)
+        else:
+            trends_start = start_date
+        
+        from django.db.models import DateField
+        from django.db.models.functions import Cast
+        
+        return list(Usagereport.objects.filter(
+            DetailsViewedDate__range=[trends_start, end_date]
+        ).extra({
+            'date': "CAST(DetailsViewedDate AS DATE)"
+        }).values('date').annotate(
+            count=Count('SearchIdentity')
+        ).order_by('date'))
+    except Exception as e:
+        logger.error(f"Error getting filtered usage trends: {str(e)}")
+        return []
+
+
+def get_subscriber_product_rate(subscriber, product_key):
+    """
+    Get the subscriber-specific rate for a product with fallback to ENQUIRY_RATES.
+    
+    Args:
+        subscriber (str): The subscriber name
+        product_key (str): The product key in ENQUIRY_RATES format (with underscores)
+    
+    Returns:
+        Decimal: The rate for the subscriber-product combination
+    """
+    try:
+        # Map product keys to actual product names in database
+        product_variations = [
+            product_key.replace('_', ' '),
+            product_key.replace('_', '-'),
+            product_key.title().replace('_', ' '),
+        ]
+        
+        # Try to find a subscriber-specific rate
+        for variation in product_variations:
+            try:
+                # Use filter().first() to handle duplicate records gracefully
+                subscriber_rate = SubscriberProductRate.objects.filter(
+                    subscriber_name=subscriber,
+                    product_name__icontains=variation
+                ).first()
+                if subscriber_rate:
+                    return subscriber_rate.rate
+            except Exception:
+                continue
+        
+        # Fall back to ENQUIRY_RATES if no specific rate exists
+        return ENQUIRY_RATES.get(product_key, Decimal('0.00'))
+    except Exception as e:
+        logger.error(f"Error getting subscriber product rate: {str(e)}")
+        return ENQUIRY_RATES.get(product_key, Decimal('0.00'))
+
+
+def get_revenue_data_filtered(start_date, end_date, revenue_product_filter=None):
+    """Get revenue data with optional product filtering - OPTIMIZED"""
+    try:
+        from django.db.models import Q, Count
+        
+        revenue_data = []
+        
+        for product_key, default_rate in ENQUIRY_RATES.items():
+            # Skip if filter is applied and doesn't match
+            if revenue_product_filter and revenue_product_filter != 'all':
+                if revenue_product_filter.lower() not in product_key.lower():
+                    continue
+            
+            # Map product keys to actual product names in database
+            product_variations = [
+                product_key.replace('_', ' '),
+                product_key.replace('_', '-'),
+                product_key.title().replace('_', ' '),
+            ]
+            
+            # Single query with OR conditions for all variations
+            q_objects = Q()
+            for variation in product_variations:
+                q_objects |= Q(ProductName__icontains=variation)
+            
+            # Get usage entries
+            usage_entries = Usagereport.objects.filter(
+                DetailsViewedDate__range=[start_date, end_date]
+            ).filter(q_objects)
+            
+            usage_count = usage_entries.count()
+            
+            if usage_count > 0:
+                # Calculate revenue using subscriber-specific rates where available
+                total_revenue = Decimal('0.00')
+                
+                # Group by subscriber to apply correct rates
+                subscriber_usage = {}
+                for entry in usage_entries:
+                    subscriber = entry.SubscriberName
+                    subscriber_usage[subscriber] = subscriber_usage.get(subscriber, 0) + 1
+                
+                # Calculate revenue with proper rates
+                for subscriber, count in subscriber_usage.items():
+                    # Get subscriber-specific rate or fall back to default
+                    rate = get_subscriber_product_rate(subscriber, product_key)
+                    # Ensure rate is Decimal and count is int
+                    if isinstance(rate, str):
+                        try:
+                            rate = Decimal(rate)
+                        except (ValueError, TypeError):
+                            rate = default_rate
+                    elif not isinstance(rate, Decimal):
+                        rate = default_rate
+                    
+                    # Calculate individual revenue and add to total
+                    individual_revenue = rate * Decimal(str(count))
+                    total_revenue += individual_revenue
+                
+                revenue_data.append({
+                    'product': product_key.replace('_', ' ').title(),
+                    'revenue': float(total_revenue),
+                    'count': usage_count,
+                    'rate': float(default_rate)  # Show default rate in UI
+                })
+        
+        return sorted(revenue_data, key=lambda x: x['revenue'], reverse=True)
+    except Exception as e:
+        logger.error(f"Error getting filtered revenue data: {str(e)}")
+        return []
+
+
+def get_revenue_data_subscriber_filtered(start_date, end_date, subscriber_name):
+    """Calculate revenue for specific subscriber"""
+    try:
+        
+        
+        revenue_data = []
+        
+        for product_key, default_rate in ENQUIRY_RATES.items():
+            # Map product keys to actual product names in database
+            product_variations = [
+                product_key.replace('_', ' '),
+                product_key.replace('_', '-'),
+                product_key.title().replace('_', ' '),
+            ]
+            
+            # Single query with OR conditions for all variations
+            q_objects = Q()
+            for variation in product_variations:
+                q_objects |= Q(ProductName__icontains=variation)
+            
+            # Get usage entries for specific subscriber
+            usage_count = Usagereport.objects.filter(
+                DetailsViewedDate__range=[start_date, end_date],
+                SubscriberName=subscriber_name
+            ).filter(q_objects).count()
+            
+            if usage_count > 0:
+                 # Get subscriber-specific rate or fall back to default
+                 rate = get_subscriber_product_rate(subscriber_name, product_key)
+                 # Ensure rate is Decimal
+                 if isinstance(rate, str):
+                     rate = Decimal(rate)
+                 total_revenue = rate * Decimal(str(usage_count))
+                
+                 revenue_data.append({
+                     'product': product_key.replace('_', ' ').title(),
+                     'revenue': float(total_revenue),
+                     'count': usage_count,
+                     'rate': float(rate)
+                 })
+        
+        return sorted(revenue_data, key=lambda x: x['revenue'], reverse=True)
+    except Exception as e:
+        logger.error(f"Error getting subscriber filtered revenue data: {str(e)}")
+        return []
+
+
+def get_revenue_data_product_filtered(start_date, end_date, product_name):
+    """Calculate revenue for specific product across all subscribers"""
+    try:
+        from django.db.models import Q
+        
+        # Find matching product key from ENQUIRY_RATES
+        matching_product_key = None
+        for product_key in ENQUIRY_RATES.keys():
+            product_variations = [
+                product_key.replace('_', ' '),
+                product_key.replace('_', '-'),
+                product_key.title().replace('_', ' '),
+            ]
+            
+            for variation in product_variations:
+                if product_name.lower() in variation.lower() or variation.lower() in product_name.lower():
+                    matching_product_key = product_key
+                    break
+            
+            if matching_product_key:
+                break
+        
+        if not matching_product_key:
+            return []
+        
+        # Map product keys to actual product names in database
+        product_variations = [
+            matching_product_key.replace('_', ' '),
+            matching_product_key.replace('_', '-'),
+            matching_product_key.title().replace('_', ' '),
+        ]
+        
+        # Single query with OR conditions for all variations
+        q_objects = Q()
+        for variation in product_variations:
+            q_objects |= Q(ProductName__icontains=variation)
+        
+        # Get usage entries for specific product
+        usage_entries = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date]
+        ).filter(q_objects)
+        
+        usage_count = usage_entries.count()
+        
+        if usage_count > 0:
+            # Calculate revenue using subscriber-specific rates where available
+            total_revenue = Decimal('0.00')
+            
+            # Group by subscriber to apply correct rates
+            subscriber_usage = {}
+            for entry in usage_entries:
+                subscriber = entry.SubscriberName
+                subscriber_usage[subscriber] = subscriber_usage.get(subscriber, 0) + 1
+            
+            # Calculate revenue with proper rates
+            for subscriber, count in subscriber_usage.items():
+                rate = get_subscriber_product_rate(subscriber, matching_product_key)
+                # Ensure rate is Decimal
+                if isinstance(rate, str):
+                    try:
+                        rate = Decimal(rate)
+                    except (ValueError, TypeError):
+                        rate = ENQUIRY_RATES[matching_product_key]
+                elif not isinstance(rate, Decimal):
+                    rate = ENQUIRY_RATES[matching_product_key]
+                
+                # Calculate individual revenue and add to total
+                individual_revenue = rate * Decimal(str(count))
+                total_revenue += individual_revenue
+            
+            return [{
+                'product': matching_product_key.replace('_', ' ').title(),
+                'revenue': float(total_revenue),
+                'count': usage_count,
+                'rate': float(ENQUIRY_RATES[matching_product_key])  # Show default rate
+            }]
+        
+        return []
+    except Exception as e:
+        logger.error(f"Error getting product filtered revenue data: {str(e)}")
+        return []
+
+
+def get_revenue_data_combined_filtered(start_date, end_date, subscriber_name, product_name):
+    """Calculate revenue for subscriber + product combination"""
+    try:
+        from django.db.models import Q
+        
+        # Find matching product key from ENQUIRY_RATES
+        matching_product_key = None
+        for product_key in ENQUIRY_RATES.keys():
+            product_variations = [
+                product_key.replace('_', ' '),
+                product_key.replace('_', '-'),
+                product_key.title().replace('_', ' '),
+            ]
+            
+            for variation in product_variations:
+                if product_name.lower() in variation.lower() or variation.lower() in product_name.lower():
+                    matching_product_key = product_key
+                    break
+            
+            if matching_product_key:
+                break
+        
+        if not matching_product_key:
+            return []
+        
+        # Map product keys to actual product names in database
+        product_variations = [
+            matching_product_key.replace('_', ' '),
+            matching_product_key.replace('_', '-'),
+            matching_product_key.title().replace('_', ' '),
+        ]
+        
+        # Single query with OR conditions for all variations
+        q_objects = Q()
+        for variation in product_variations:
+            q_objects |= Q(ProductName__icontains=variation)
+        
+        # Get usage entries for specific subscriber and product
+        usage_count = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date],
+            SubscriberName=subscriber_name
+        ).filter(q_objects).count()
+        
+        if usage_count > 0:
+            # Get subscriber-specific rate for this product
+            rate = get_subscriber_product_rate(subscriber_name, matching_product_key)
+            # Ensure rate is Decimal
+            if isinstance(rate, str):
+                rate = Decimal(rate)
+            total_revenue = rate * Decimal(str(usage_count))
+            
+            return [{
+                'product': matching_product_key.replace('_', ' ').title(),
+                'revenue': float(total_revenue),
+                'count': usage_count,
+                'rate': float(rate)
+            }]
+        
+        return []
+    except Exception as e:
+        logger.error(f"Error getting combined filtered revenue data: {str(e)}")
+        return []
+
+
+def get_top_products_by_subscriber_filtered(start_date, end_date, subscriber_name):
+    """Show only products used by selected subscriber"""
+    try:
+        from django.db.models import Count
+        
+        if not subscriber_name:
+            return []
+        
+        # Get products used by the specific subscriber
+        products = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date],
+            SubscriberName=subscriber_name
+        ).values('ProductName').annotate(
+            usage_count=Count('ProductName')
+        ).order_by('-usage_count')[:10]
+        
+        result = []
+        for product in products:
+            result.append({
+                'product': product['ProductName'],
+                'count': product['usage_count']
+            })
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error getting top products by subscriber: {str(e)}")
+        return []
+
+
+def get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days=None):
+    """Get new subscribers trend with optional day filtering - OPTIMIZED"""
+    try:
+        from django.db.models import Min
+        
+        # Use custom days if provided, otherwise use the full range
+        if new_subscribers_days and new_subscribers_days.isdigit():
+            days = int(new_subscribers_days)
+            trends_start = end_date - timedelta(days=days)
+        else:
+            trends_start = start_date
+        
+        # Single query to get first usage date for each subscriber
+        first_usage_dates = Usagereport.objects.values('SubscriberName').annotate(
+            first_usage=Min('DetailsViewedDate')
+        ).filter(
+            first_usage__range=[trends_start, end_date]
+        )
+        
+        # Group by date
+        trend_data = {}
+        for item in first_usage_dates:
+            date_key = item['first_usage'].strftime('%Y-%m-%d')
+            trend_data[date_key] = trend_data.get(date_key, 0) + 1
+        
+        # Create complete date range with zero counts for missing dates
+        new_subscribers_by_date = []
+        current_date = trends_start
+        
+        while current_date <= end_date:
+            date_key = current_date.strftime('%Y-%m-%d')
+            new_subscribers_by_date.append({
+                'date': date_key,
+                'new_subscribers': trend_data.get(date_key, 0)
+            })
+            current_date += timedelta(days=1)
+        
+        return new_subscribers_by_date
+    except Exception as e:
+        logger.error(f"Error getting filtered new subscribers trend: {str(e)}")
+        return []
+
+
+    # return render(request, 'bulkrep/bulk_report.html', context)

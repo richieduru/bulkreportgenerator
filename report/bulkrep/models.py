@@ -6,41 +6,26 @@ from decimal import Decimal
 # Create your models here.
 
 class SubscriberProductRate(models.Model):
-    # Exactly matching the 3 columns in the actual database table
-    # Make subscriber_name the primary key to prevent Django from looking for an id field
-    subscriber_name = models.CharField(max_length=255, db_column='subscriber_name', primary_key=True)
+    subscriber_name = models.CharField(max_length=255, db_column='subscriber_name')
     product_name = models.CharField(max_length=255, db_column='ProductName')
     rate = models.DecimalField(max_digits=10, decimal_places=2, db_column='rate')
-    
-    # This is crucial - we need to tell Django not to look for an 'id' field
-    # and that these two fields together form the primary key
-    class Meta:
-        managed = False  # Django won't create or alter this table
-        db_table = 'SubscriberProductRate'  # The exact name of your existing table
-        # Define the composite primary key
-        unique_together = (('subscriber_name', 'product_name'),)
-        # This is critical - it tells Django not to assume an 'id' field exists
-        # for lookups and to use the fields we define as the primary key fields instead
 
-    # We need to set this to return the composite primary key for Django to work properly
-    def natural_key(self):
-        return (self.subscriber_name, self.product_name)
-        
+    class Meta:
+        managed = False
+        db_table = 'SubscriberProductRate'
+        unique_together = (('subscriber_name', 'product_name'),)
+
     def __str__(self):
         return f"{self.subscriber_name} - {self.product_name} - {self.rate}"
 
 
 class Usagereport(models.Model):
-    # Define a primary key field that Django will use internally but won't be part of SQL queries
-    # This solves the "Invalid column name 'id'" error
-    id = models.CharField(primary_key=True, max_length=255, editable=False)
-    
     # Actual fields from the database
     SubscriberName = models.CharField(max_length=255, db_column='SubscriberName')
     DetailsViewedDate = models.DateField(db_column='DetailsViewedDate')
     ProductName = models.CharField(max_length=255, db_column='ProductName')
     SystemUser = models.CharField(max_length=255, db_column='SystemUser', null=True, blank=True)
-    SearchIdentity = models.CharField(max_length=255, db_column='SearchIdentity', null=True, blank=True)
+    SearchIdentity = models.CharField(max_length=255, db_column='SearchIdentity', primary_key=True) 
     SubscriberEnquiryDate = models.DateField(db_column='SubscriberEnquiryDate', null=True, blank=True)
     SearchOutput = models.TextField(db_column='SearchOutput', null=True, blank=True)
     ProductInputed = models.CharField(max_length=255, db_column='ProductInputed', null=True, blank=True)
@@ -48,15 +33,10 @@ class Usagereport(models.Model):
     class Meta:
         managed = False  # Tell Django not to manage this table
         db_table = 'usagereport' # Specify the existing table name
+        unique_together = (('SubscriberName', 'ProductName', 'SearchIdentity'),)
     
     def __str__(self):
-        return f"{self.SubscriberName} - {self.ProductName}"
-    
-    # Override the save method to set the id field based on other fields
-    def save(self, *args, **kwargs):
-        # Create a unique identifier from the field values
-        self.id = f"{self.SubscriberName}_{self.DetailsViewedDate}_{self.ProductName}"
-        super().save(*args, **kwargs)
+        return f"{self.SubscriberName} - {self.ProductName} - {self.SearchIdentity}"
 
 
 class ReportGeneration(models.Model):

@@ -134,10 +134,11 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
-STATICFILES_DIRS = [
-    BASE_DIR / 'static',
-]
+STATIC_URL = '/static/'
+# STATICFILES_DIRS = [
+#     BASE_DIR / 'static',
+# ]
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Media files configuration
 MEDIA_URL = '/media/'
@@ -146,7 +147,8 @@ MEDIA_ROOT = Path(__file__).resolve().parent.parent.parent / 'media'
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
-
+# X-Frame-Options setting to allow dashboard embedding
+X_FRAME_OPTIONS = 'SAMEORIGIN'
 
 # Impersonation settings
 IMPERSONATE = {
@@ -157,6 +159,23 @@ IMPERSONATE = {
     'CUSTOM_USER_QUERYSET': 'accounts.impersonation.get_impersonatable_users',  # Custom user queryset function
     'REDIRECT_FIELD_NAME': 'next',  # Use Django's default redirect field name
 }
+
+# Caching Configuration
+# Using database cache for simplicity (no Redis setup required)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'dashboard_cache_table',
+        'TIMEOUT': 300,  # 5 minutes default timeout
+        'OPTIONS': {
+            'MAX_ENTRIES': 1000,
+            'CULL_FREQUENCY': 3,
+        }
+    }
+}
+
+# Cache key prefix to avoid conflicts
+CACHE_MIDDLEWARE_KEY_PREFIX = 'bulkrep'
 
 # Email configuration for password reset and notifications
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

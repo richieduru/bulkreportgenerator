@@ -32,6 +32,9 @@ urlpatterns = [
     path('impersonate/', include('impersonate.urls'), {'next': '/admin/'}),
     # Add a simple view to stop impersonation
     path('stop-impersonate/', RedirectView.as_view(pattern_name='impersonate-stop'), name='stop_impersonate'),
+    # Django Plotly Dash URLs
+    # path('django_plotly_dash/', include('django_plotly_dash.urls')),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
