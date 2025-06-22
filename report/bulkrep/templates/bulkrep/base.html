@@ -26,13 +26,23 @@
     {% block extra_css %}{% endblock %}
     <style>
       .navbar-custom {
-        background: #fff;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+        background: linear-gradient(
+          135deg,
+          rgba(102, 126, 234, 0.15) 0%,
+          rgba(118, 75, 162, 0.15) 100%
+        );
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(102, 126, 234, 0.1);
       }
       .navbar-custom .navbar-brand,
       .navbar-custom .nav-link {
-        color: #222 !important;
+        color: #333 !important;
         font-weight: 600;
+      }
+      .navbar-custom .nav-link:hover {
+        color: #667eea !important;
+        transition: color 0.3s ease;
       }
       .navbar-logo {
         height: 45px;
@@ -69,10 +79,10 @@
     {% include 'accounts/impersonation_banner.html' %}
 
     <!-- Navigation -->
-    <nav class="navbar navbar-expand-lg navbar-custom py-2">
-      <div class="container">
+    <nav class="navbar navbar-expand-lg navbar-custom py-3">
+      <div class="container-fluid px-4">
         <!-- Logo at the start -->
-        <a class="navbar-brand" href="{% url 'bulkrep:home' %}">
+        <a class="navbar-brand me-4" href="{% url 'bulkrep:home' %}">
           <img
             src="{% static 'Images/FirstCentralAPPROVEDLogo.png' %}"
             alt="First Central Logo"
@@ -90,37 +100,37 @@
         </button>
 
         <div class="collapse navbar-collapse" id="navbarNav">
-          <!-- Navigation items -->
-          <ul class="navbar-nav mx-auto">
+          <!-- Navigation items - centered with even spacing -->
+          <ul class="navbar-nav mx-auto d-flex justify-content-center gap-4">
             <li class="nav-item">
-              <a class="nav-link" href="{% url 'bulkrep:single_report' %}"
+              <a class="nav-link px-3" href="{% url 'bulkrep:single_report' %}"
                 >Single Report</a
               >
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{% url 'bulkrep:bulk_report' %}"
+              <a class="nav-link px-3" href="{% url 'bulkrep:bulk_report' %}"
                 >Bulk Report</a
               >
             </li>
             {% if user.is_superuser %}
             <li class="nav-item">
-              <a class="nav-link" href="{% url 'bulkrep:dashboard' %}"
+              <a class="nav-link px-3" href="{% url 'bulkrep:dashboard' %}"
                 ><i class="fas fa-chart-line me-1"></i>Dashboard</a
               >
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="/admin/"
+              <a class="nav-link px-3" href="/admin/"
                 ><i class="fas fa-cog me-1"></i>Admin</a
               >
             </li>
             {% endif %}
           </ul>
 
-          <!-- User info and logout -->
-          <ul class="navbar-nav ms-auto">
+          <!-- User info and logout - right aligned with spacing -->
+          <ul class="navbar-nav ms-auto d-flex align-items-center gap-3">
             {% if user.is_authenticated %}
             <li class="nav-item">
-              <span class="nav-link">Hello, {{ user.username }}</span>
+              <span class="nav-link px-3">Hello, {{ user.username }}</span>
             </li>
             <li class="nav-item">
               <form
@@ -131,7 +141,7 @@
                 {% csrf_token %}
                 <button
                   type="submit"
-                  class="nav-link btn btn-link p-0"
+                  class="nav-link btn btn-link px-3"
                   style="background: none; border: none"
                   title="Logout"
                 >
@@ -141,7 +151,9 @@
             </li>
             {% else %}
             <li class="nav-item">
-              <a class="nav-link" href="{% url 'accounts:login' %}">Login</a>
+              <a class="nav-link px-3" href="{% url 'accounts:login' %}"
+                >Login</a
+              >
             </li>
             {% endif %}
           </ul>

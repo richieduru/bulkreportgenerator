@@ -10,4 +10,5 @@ urlpatterns = [
     path('bulk-report/', views.bulk_report, name='bulk_report'),
     path('dashboard/', views.dashboard, name='dashboard'),
     path('dashboard-api/', views.dashboard_api, name='dashboard_api'),
+    path('download-churned-subscribers/', views.download_churned_subscribers, name='download_churned_subscribers'),
 ]

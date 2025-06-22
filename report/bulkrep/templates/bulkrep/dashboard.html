@@ -1,5 +1,5 @@
-{% extends 'bulkrep/base.html' %} {% load static %} {% block title %}{{ title
-}}{% endblock %} {% block extra_css %}
+{% extends 'bulkrep/base.html' %} {% load static %} {% block title %} Dashboard
+{% endblock %} {% block extra_css %}
 <style>
   .dashboard-container {
     padding: 20px;
@@ -31,19 +31,20 @@
   }
 
   .metric-card h3 {
-    font-size: 2.5rem;
+    font-size: 1.8rem;
     font-weight: bold;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .metric-card.top-subscriber h3 {
-    font-size: 1.8rem;
+    font-size: 1.4rem;
   }
 
   .metric-card p {
-    font-size: 1rem;
+    font-size: 0.85rem;
     margin: 0;
     opacity: 0.9;
+    line-height: 1.2;
   }
 
   .chart-container {
@@ -102,14 +103,18 @@
   }
 
   .loading-overlay {
-    position: absolute; /* Changed from fixed to absolute */
+    position: sticky; /* Changed from fixed to absolute */
     top: 10px; /* Position from the top of its container */
     left: 50%; /* Center horizontally */
     transform: translateX(-50%); /* Adjust for centering */
     width: auto; /* Adjust width to content */
     height: auto; /* Adjust height to content */
     padding: 10px 20px; /* Add some padding */
-    background: rgba(255, 255, 255, 0.95); /* Slightly more opaque */
+    background: linear-gradient(
+      135deg,
+      rgba(102, 126, 234, 0.15) 0%,
+      rgba(118, 75, 162, 0.15) 100%
+    );
     display: flex;
     justify-content: center;
     align-items: center;
@@ -133,10 +138,32 @@
     transition: all 0.3s ease;
   }
 
-  .btn-refresh:hover {
+  .btn-refresh:hover:not(:disabled) {
     transform: translateY(-2px);
     box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
     color: white;
+  }
+
+  .btn-refresh:disabled {
+    background: #e9ecef;
+    color: #6c757d;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  .btn-outline-secondary {
+    background: transparent;
+    color: #6c757d;
+    border: 1px solid #dee2e6;
+    padding: 10px 20px;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+  }
+
+  .btn-outline-secondary:hover:not(:disabled) {
+    background: #f8f9fa;
+    border-color: #adb5bd;
+    color: #495057;
   }
 
   .time-range-select {
@@ -223,7 +250,10 @@
             </div>
           </div>
 
-          <button id="refreshBtn" class="btn btn-refresh">
+          <button id="applyBtn" class="btn btn-refresh" disabled>
+            <i class="fas fa-check me-1"></i> Apply Changes
+          </button>
+          <button id="refreshBtn" class="btn btn-outline-secondary">
             <i class="fas fa-sync-alt me-1"></i> Refresh
           </button>
         </div>
@@ -307,13 +337,45 @@
         <p><i class="fas fa-heart me-1"></i>Retention Rate</p>
       </div>
     </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card top-subscriber">
+        <h3 id="highestProductByTransaction">-</h3>
+        <p>
+          <i class="fas fa-shopping-cart me-1"></i>Highest Product by
+          Transaction
+        </p>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card top-subscriber">
+        <h3 id="highestProductByRevenue">-</h3>
+        <p><i class="fas fa-dollar-sign me-1"></i>Highest Product by Revenue</p>
+      </div>
+    </div>
+    <div class="col-lg-3 col-md-6">
+      <div class="metric-card" id="dailyComparisonCard">
+        <h3>
+          <span id="todayUsage">-</span>
+          <small style="font-size: 1rem">today</small>
+          <span style="font-size: 1.2rem; margin: 0 8px">/</span>
+          <span id="prevMonthUsage">-</span>
+          <small style="font-size: 1rem">last month</small>
+        </h3>
+        <p>
+          <i class="fas fa-calendar-day me-1"></i>
+          <span id="dailyComparisonLabel"
+            >Today's Usage vs. Same Day Last Month</span
+          >
+        </p>
+      </div>
+    </div>
   </div>
 
   <!-- Charts Row 1 -->
   <div class="row mb-4">
     <div class="col-lg-8">
       <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-chart-line me-2"></i>Usage Trends Over Time</h5>
           <div class="d-flex gap-2">
             <select
@@ -333,7 +395,7 @@
     </div>
     <div class="col-lg-4">
       <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-trophy me-2"></i>Top Products</h5>
           <div class="d-flex gap-2">
             <select
@@ -354,7 +416,30 @@
   <div class="row mb-4">
     <div class="col-lg-6">
       <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h5><i class="fas fa-calendar-alt me-2"></i>3-Month Rolling Usage</h5>
+          <button
+            id="load3MonthBtn"
+            class="btn btn-primary btn-sm"
+            onclick="loadThreeMonthData()"
+          >
+            <i class="fas fa-chart-line me-1"></i>Load 3-Month View
+          </button>
+        </div>
+        <div id="threeMonthChartContainer" style="display: none">
+          <canvas id="threeMonthUsageChart"></canvas>
+        </div>
+        <div id="threeMonthPlaceholder" class="text-center text-muted py-5">
+          <i class="fas fa-chart-line fa-3x"></i>
+          <p>
+            Click "Load 3-Month View" to see the 3-month rolling usage chart
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center">
           <h5>
             <i class="fas fa-user-friends me-2"></i>Top Subscribers by Usage
           </h5>
@@ -371,30 +456,13 @@
         <canvas id="topSubscribersChart"></canvas>
       </div>
     </div>
-    <div class="col-lg-6">
-      <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5><i class="fas fa-money-bill-wave me-2"></i>Revenue by Product</h5>
-          <div class="d-flex gap-2">
-            <select
-              id="revenueProductFilter"
-              class="form-select form-select-sm"
-              style="width: 120px"
-            >
-              <option value="all">All Products</option>
-            </select>
-          </div>
-        </div>
-        <canvas id="revenueChart"></canvas>
-      </div>
-    </div>
   </div>
 
   <!-- Charts Row 3 -->
   <div class="row mb-4">
     <div class="col-lg-6">
       <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-user-plus me-2"></i>New Subscribers Trend</h5>
           <div class="d-flex gap-2">
             <select
@@ -412,36 +480,105 @@
         <canvas id="newSubscribersChart"></canvas>
       </div>
     </div>
+
     <div class="col-lg-6">
       <div class="chart-container">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-user-times me-2"></i>Churn Analysis</h5>
+          <button
+            id="downloadChurnedBtn"
+            class="btn btn-outline-secondary btn-sm"
+            title="Download CSV"
+            style="border: none; background: none; color: #6c757d"
+          >
+            <i class="fas fa-download"></i>
+          </button>
+        </div>
+
+        <!-- Date Range Controls -->
+        <div class="">
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <label class="form-label mb-0 me-1" style="font-size: 0.875rem"
+              >Date range:</label
+            >
+            <input
+              type="date"
+              id="churnStartDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <span class="mx-1">to</span>
+            <input
+              type="date"
+              id="churnEndDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <button
+              id="applyChurnFilter"
+              class="btn btn-primary btn-sm"
+              style="font-size: 0.75rem; padding: 0.25rem 0.5rem"
+            >
+              Apply
+            </button>
+          </div>
+        </div>
+
+        <!-- Metrics Row -->
+        <div class="row text-center">
+          <div class="col-4">
+            <div class="p-2">
+              <h5 id="churnRate" class="text-danger mb-1">-</h5>
+              <small class="text-muted">Churn Rate</small>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="p-2">
+              <h5 id="churnedCount" class="text-warning mb-1">-</h5>
+              <small class="text-muted">Churned Users</small>
+            </div>
+          </div>
+          <div class="col-4">
+            <div class="p-2">
+              <h5 id="activeCount" class="text-success mb-1">-</h5>
+              <small class="text-muted">Active Users</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chart Section -->
+        <div class="">
+          <div class="card">
+            <div class="card-header py-2">
+              <h6 class="mb-0">Churn Trend</h6>
+            </div>
+            <div class="card-body p-2" style="height: 240px">
+              <canvas id="churnTrendChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 2.5 - Revenue by Product -->
+  <div class="row mb-4">
+    <div class="col-lg-6">
+      <div class="chart-container">
+        <div class="d-flex justify-content-between align-items-center">
+          <h5><i class="fas fa-money-bill-wave me-2"></i>Revenue by Product</h5>
           <div class="d-flex gap-2">
             <select
-              id="churnAnalysisTimeFilter"
+              id="revenueProductFilter"
               class="form-select form-select-sm"
-              style="width: 150px"
+              style="width: 120px"
             >
-              <option value="30" selected>Last 30 days</option>
-              <option value="90">Last 90 days</option>
-              <option value="180">Last 6 months</option>
+              <option value="all">All Products</option>
             </select>
           </div>
         </div>
-        <div class="row text-center mt-4">
-          <div class="col-4">
-            <h4 id="churnRate" class="text-danger">-</h4>
-            <p class="text-muted">Churn Rate</p>
-          </div>
-          <div class="col-4">
-            <h4 id="churnedCount" class="text-warning">-</h4>
-            <p class="text-muted">Churned Users</p>
-          </div>
-          <div class="col-4">
-            <h4 id="activeCount" class="text-success">-</h4>
-            <p class="text-muted">Active Users</p>
-          </div>
-        </div>
+        <canvas id="revenueChart"></canvas>
       </div>
     </div>
   </div>
@@ -502,6 +639,9 @@
         .getElementById("endDate")
         .addEventListener("change", () => this.handleCustomDateChange());
       document
+        .getElementById("applyBtn")
+        .addEventListener("click", () => this.applyDateChanges());
+      document
         .getElementById("refreshBtn")
         .addEventListener("click", () => this.loadData());
 
@@ -522,8 +662,17 @@
         .getElementById("newSubscribersTimeFilter")
         .addEventListener("change", () => this.updateNewSubscribersChart());
       document
-        .getElementById("churnAnalysisTimeFilter")
-        .addEventListener("change", () => this.updateChurnAnalysis());
+        .getElementById("applyChurnFilter")
+        .addEventListener("click", () => this.updateChurnAnalysis());
+      document
+        .getElementById("churnStartDate")
+        .addEventListener("change", () => this.validateChurnDateRange());
+      document
+        .getElementById("churnEndDate")
+        .addEventListener("change", () => this.validateChurnDateRange());
+      document
+        .getElementById("downloadChurnedBtn")
+        .addEventListener("click", () => this.downloadChurnedSubscribers());
 
       // Global filter listeners
       document
@@ -617,6 +766,9 @@
             current_subscribers: 0,
           },
           retention_rate: data.retention_rate || { retention_rate: 0 },
+          highest_product_by_transaction:
+            data.highest_product_by_transaction || "N/A",
+          highest_product_by_revenue: data.highest_product_by_revenue || "N/A",
           unique_products: Array.isArray(data.unique_products)
             ? data.unique_products
             : [],
@@ -641,6 +793,10 @@
         document.getElementById("totalUsage").textContent = "Error";
         document.getElementById("totalRevenue").textContent = "Error";
         document.getElementById("topSubscriber").textContent = "Error";
+        document.getElementById("highestProductByTransaction").textContent =
+          "Error";
+        document.getElementById("highestProductByRevenue").textContent =
+          "Error";
 
         alert(errorMessage);
       } finally {
@@ -683,6 +839,21 @@
         "retentionRate"
       ).textContent = `${data.retention_rate.retention_rate}%`;
 
+      // Update highest product by transaction
+      const highestProductByTransaction =
+        data.highest_product_by_transaction || "N/A";
+      document.getElementById("highestProductByTransaction").textContent =
+        highestProductByTransaction.length > 15
+          ? highestProductByTransaction.substring(0, 15) + "..."
+          : highestProductByTransaction;
+
+      // Update highest product by revenue
+      const highestProductByRevenue = data.highest_product_by_revenue || "N/A";
+      document.getElementById("highestProductByRevenue").textContent =
+        highestProductByRevenue.length > 15
+          ? highestProductByRevenue.substring(0, 15) + "..."
+          : highestProductByRevenue;
+
       // Update churn metrics
       document.getElementById(
         "churnRate"
@@ -695,6 +866,22 @@
       // Populate filter dropdowns
       this.populateFilterDropdowns(data);
       this.populateGlobalFilters(data);
+
+      // --- NEW: Daily Comparison Metric ---
+      if (data.daily_comparison) {
+        document.getElementById("todayUsage").textContent =
+          data.daily_comparison.today.count.toLocaleString();
+        document.getElementById("prevMonthUsage").textContent =
+          data.daily_comparison.previous_month.count.toLocaleString();
+        document.getElementById(
+          "dailyComparisonLabel"
+        ).textContent = `Usage: ${data.daily_comparison.today.date} vs ${data.daily_comparison.previous_month.date}`;
+      } else {
+        document.getElementById("todayUsage").textContent = "-";
+        document.getElementById("prevMonthUsage").textContent = "-";
+        document.getElementById("dailyComparisonLabel").textContent =
+          "Today's Usage vs. Same Day Last Month";
+      }
     }
 
     updateLastUpdated() {
@@ -710,6 +897,8 @@
       this.createTopSubscribersChart(data.top_subscribers);
       this.createRevenueChart(data.revenue_data);
       this.createNewSubscribersChart(data.new_subscribers);
+
+      // 3-month chart will be loaded on demand when button is clicked
     }
 
     populateFilterDropdowns(data) {
@@ -820,15 +1009,18 @@
     // Individual chart update methods
     updateUsageTrendsChart() {
       if (!this.dashboardData) return;
+      this.showLoading();
       const days = parseInt(
         document.getElementById("usageTrendsTimeFilter").value
       );
       const filteredData = this.dashboardData.usage_trends.slice(-days);
       this.createUsageTrendsChart(filteredData);
+      this.hideLoading();
     }
 
     updateTopProductsChart() {
       if (!this.dashboardData) return;
+      this.showLoading();
       const selectedProduct =
         document.getElementById("topProductsFilter").value;
       let filteredData = this.dashboardData.top_products;
@@ -840,10 +1032,12 @@
       }
 
       this.createTopProductsChart(filteredData);
+      this.hideLoading();
     }
 
     updateTopSubscribersChart() {
       if (!this.dashboardData) return;
+      this.showLoading();
       const selectedSubscriber = document.getElementById(
         "topSubscribersFilter"
       ).value;
@@ -856,10 +1050,12 @@
       }
 
       this.createTopSubscribersChart(filteredData);
+      this.hideLoading();
     }
 
     updateRevenueChart() {
       if (!this.dashboardData) return;
+      this.showLoading();
       const selectedProduct = document.getElementById(
         "revenueProductFilter"
       ).value;
@@ -872,23 +1068,138 @@
       }
 
       this.createRevenueChart(filteredData);
+      this.hideLoading();
     }
 
     updateNewSubscribersChart() {
       if (!this.dashboardData) return;
+      this.showLoading();
       const days = parseInt(
         document.getElementById("newSubscribersTimeFilter").value
       );
       const filteredData = this.dashboardData.new_subscribers.slice(-days);
       this.createNewSubscribersChart(filteredData);
+      this.hideLoading();
     }
 
     updateChurnAnalysis() {
-      // For churn analysis, we would need to fetch new data based on the time filter
-      // For now, we'll just update the display with existing data
-      if (!this.dashboardData) return;
-      // This would typically require a new API call with the time filter
-      console.log("Churn analysis filter changed - would need API update");
+      // Get date range values
+      const startDate = document.getElementById("churnStartDate").value;
+      const endDate = document.getElementById("churnEndDate").value;
+
+      if (!startDate || !endDate) {
+        alert("Please select both start and end dates for churn analysis.");
+        return;
+      }
+
+      if (new Date(startDate) > new Date(endDate)) {
+        alert("Start date cannot be later than end date.");
+        return;
+      }
+
+      this.showLoading();
+
+      // Make API call to get churn data for the selected date range
+      const params = new URLSearchParams({
+        start_date: startDate,
+        end_date: endDate,
+        churn_analysis: "true",
+      });
+
+      fetch(`/dashboard-api/?${params.toString()}`)
+        .then((response) => response.json())
+        .then((data) => {
+          if (data.churn_data) {
+            this.updateChurnDisplay(data.churn_data);
+          }
+          this.hideLoading();
+        })
+        .catch((error) => {
+          console.error("Error fetching churn data:", error);
+          this.hideLoading();
+        });
+    }
+
+    downloadChurnedSubscribers() {
+      // Get churn analysis date range values
+      const startDate = document.getElementById("churnStartDate").value;
+      const endDate = document.getElementById("churnEndDate").value;
+
+      if (!startDate || !endDate) {
+        alert("Please select both start and end dates before downloading.");
+        return;
+      }
+
+      // Build URL with parameters
+      const params = new URLSearchParams();
+      params.append("start_date", startDate);
+      params.append("end_date", endDate);
+
+      // Create download URL
+      const downloadUrl = `/download-churned-subscribers/?${params.toString()}`;
+
+      // Trigger download by creating a temporary link
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = "";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    updateChurnDisplay(churnData) {
+      // Update churn rate
+      const churnRateElement = document.getElementById("churnRate");
+      if (churnData.churn_rate !== undefined) {
+        churnRateElement.textContent = `${churnData.churn_rate.toFixed(1)}%`;
+      } else {
+        churnRateElement.textContent = "-";
+      }
+
+      // Update churned count
+      const churnedCountElement = document.getElementById("churnedCount");
+      if (churnData.churned_count !== undefined) {
+        churnedCountElement.textContent =
+          churnData.churned_count.toLocaleString();
+      } else {
+        churnedCountElement.textContent = "-";
+      }
+
+      // Update active count
+      const activeCountElement = document.getElementById("activeCount");
+      if (churnData.current_subscribers !== undefined) {
+        activeCountElement.textContent =
+          churnData.current_subscribers.toLocaleString();
+      } else {
+        activeCountElement.textContent = "-";
+      }
+
+      // Create churn trend chart if trend data is available
+      if (churnData.trend_data && churnData.trend_data.length > 0) {
+        this.createChurnTrendChart(churnData.trend_data);
+      }
+    }
+
+    validateChurnDateRange() {
+      const startDate = document.getElementById("churnStartDate").value;
+      const endDate = document.getElementById("churnEndDate").value;
+      const applyButton = document.getElementById("applyChurnFilter");
+
+      if (startDate && endDate) {
+        if (new Date(startDate) > new Date(endDate)) {
+          applyButton.disabled = true;
+          applyButton.title = "Start date cannot be later than end date";
+        } else {
+          applyButton.disabled = false;
+          applyButton.title = "Apply date filter for churn analysis";
+        }
+      } else {
+        applyButton.disabled = !startDate || !endDate;
+        applyButton.title =
+          startDate && endDate
+            ? "Apply date filter for churn analysis"
+            : "Please select both start and end dates";
+      }
     }
 
     populateGlobalFilters(data) {
@@ -981,7 +1292,12 @@
       this.charts.usageTrends = new Chart(ctx, {
         type: "line",
         data: {
-          labels: data.map((item) => new Date(item.date).toLocaleDateString()),
+          labels: data.map((item) => {
+            const date = new Date(item.date);
+            return `${date.getDate()}/${(date.getMonth() + 1)
+              .toString()
+              .padStart(2, "0")}/${date.getFullYear()}`;
+          }),
           datasets: [
             {
               label: "Daily Usage",
@@ -1270,7 +1586,12 @@
       this.charts.newSubscribers = new Chart(ctx, {
         type: "line",
         data: {
-          labels: data.map((item) => new Date(item.date).toLocaleDateString()),
+          labels: data.map((item) => {
+            const date = new Date(item.date);
+            return `${date.getDate()}/${(date.getMonth() + 1)
+              .toString()
+              .padStart(2, "0")}/${date.getFullYear()}`;
+          }),
           datasets: [
             {
               label: "New Subscribers",
@@ -1310,6 +1631,66 @@
       });
     }
 
+    createChurnTrendChart(data) {
+      const ctx = document.getElementById("churnTrendChart").getContext("2d");
+      if (this.charts.churnTrend) this.charts.churnTrend.destroy();
+
+      this.charts.churnTrend = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: data.map((item) => new Date(item.date).toLocaleDateString()),
+          datasets: [
+            {
+              label: "Churn Rate (%)",
+              data: data.map((item) => item.churn_rate),
+              borderColor: "#dc3545",
+              backgroundColor: "rgba(220, 53, 69, 0.1)",
+              tension: 0.4,
+              fill: true,
+              pointBackgroundColor: "#dc3545",
+              pointBorderColor: "#fff",
+              pointBorderWidth: 2,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false,
+            },
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+              ticks: {
+                callback: function (value) {
+                  return value + "%";
+                },
+              },
+            },
+            x: {
+              grid: {
+                color: "rgba(0,0,0,0.1)",
+              },
+              ticks: {
+                maxRotation: 45,
+                minRotation: 0,
+                padding: 10,
+                font: {
+                  size: 11,
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
     handleDatePresetChange() {
       const preset = document.getElementById("datePreset").value;
       const startDateInput = document.getElementById("startDate");
@@ -1318,6 +1699,7 @@
 
       if (preset === "custom") {
         customInputs.style.display = "flex";
+        this.enableApplyButton();
         return;
       }
 
@@ -1346,14 +1728,35 @@
       }
 
       this.updateCurrentDateRangeDisplay();
+      // For preset changes, apply immediately
       this.loadData();
+      this.disableApplyButton();
     }
 
     handleCustomDateChange() {
       document.getElementById("datePreset").value = "custom";
       document.getElementById("customDateInputs").style.display = "flex";
       this.updateCurrentDateRangeDisplay();
+      this.enableApplyButton();
+    }
+
+    applyDateChanges() {
       this.loadData();
+      this.disableApplyButton();
+    }
+
+    enableApplyButton() {
+      const applyBtn = document.getElementById("applyBtn");
+      applyBtn.disabled = false;
+      applyBtn.classList.remove("btn-outline-secondary");
+      applyBtn.classList.add("btn-refresh");
+    }
+
+    disableApplyButton() {
+      const applyBtn = document.getElementById("applyBtn");
+      applyBtn.disabled = true;
+      applyBtn.classList.remove("btn-refresh");
+      applyBtn.classList.add("btn-outline-secondary");
     }
 
     updateCurrentDateRangeDisplay() {
@@ -1387,24 +1790,29 @@
 
       // Start date: first day of the current month
       const startDateObj = new Date(currentYear, currentMonth, 1);
-      
+
       // End date: first day of the next month
       // The Date constructor handles month overflow automatically (e.g., month 11 (Dec) + 1 = month 12 -> Jan of next year)
       const endDateObj = new Date(currentYear, currentMonth + 1, 1);
 
       // Helper function to format date as YYYY-MM-DD using local date components
       function formatDateToYYYYMMDD(date) {
-          const year = date.getFullYear();
-          const month = (date.getMonth() + 1).toString().padStart(2, '0'); // getMonth is 0-indexed, +1 for actual month number
-          const day = date.getDate().toString().padStart(2, '0');
-          return `${year}-${month}-${day}`;
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, "0"); // getMonth is 0-indexed, +1 for actual month number
+        const day = date.getDate().toString().padStart(2, "0");
+        return `${year}-${month}-${day}`;
       }
 
       const formattedStartDate = formatDateToYYYYMMDD(startDateObj);
       const formattedEndDate = formatDateToYYYYMMDD(endDateObj);
-      
-      console.log('Setting dates (local):', formattedStartDate, 'to', formattedEndDate);
-      
+
+      console.log(
+        "Setting dates (local):",
+        formattedStartDate,
+        "to",
+        formattedEndDate
+      );
+
       document.getElementById("startDate").value = formattedStartDate;
       document.getElementById("endDate").value = formattedEndDate;
       document.getElementById("datePreset").value = "custom";
@@ -1417,6 +1825,171 @@
   // Initialize dashboard when page loads
   document.addEventListener("DOMContentLoaded", () => {
     new DashboardManager();
+
+    // Initialize churn analysis date inputs with default values (current month range)
+    const today = new Date();
+
+    // Set start date to 1st of current month
+    const currentMonthStart = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      1
+    );
+
+    // Set end date to 1st of next month
+    const nextMonthStart = new Date(
+      today.getFullYear(),
+      today.getMonth() + 1,
+      1
+    );
+
+    // Helper function to format date as YYYY-MM-DD
+    function formatDateToYYYYMMDD(date) {
+      const year = date.getFullYear();
+      const month = (date.getMonth() + 1).toString().padStart(2, "0");
+      const day = date.getDate().toString().padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+
+    document.getElementById("churnStartDate").value =
+      formatDateToYYYYMMDD(currentMonthStart);
+    document.getElementById("churnEndDate").value =
+      formatDateToYYYYMMDD(nextMonthStart);
   });
+
+  // Global variables for 3-month view
+  let threeMonthChart = null;
+
+  // Load 3-month rolling usage data
+  function loadThreeMonthData() {
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    loadingOverlay.style.display = "flex";
+
+    // Get current subscriber filter
+    const subscriberFilter = document.getElementById(
+      "globalSubscriberFilter"
+    ).value;
+
+    // Build URL with 3-month view parameter
+    let url = "/dashboard-api/?three_month_view=true";
+    if (subscriberFilter && subscriberFilter !== "all") {
+      url += `&subscriber_filter=${encodeURIComponent(subscriberFilter)}`;
+    }
+
+    console.log("Loading 3-month data from URL:", url);
+
+    fetch(url)
+      .then((response) => {
+        console.log("Response status:", response.status);
+        return response.json();
+      })
+      .then((data) => {
+        console.log("Received data:", data);
+        if (data.three_month_usage) {
+          console.log("3-month usage data:", data.three_month_usage);
+          // Hide placeholder and show chart container
+          document.getElementById("threeMonthPlaceholder").style.display =
+            "none";
+          document.getElementById("threeMonthChartContainer").style.display =
+            "block";
+          // Hide the load button after successful load
+          document.getElementById("load3MonthBtn").style.display = "none";
+          renderThreeMonthChart(data.three_month_usage);
+        } else {
+          console.log("No three_month_usage data in response");
+          alert("No 3-month usage data available.");
+        }
+      })
+      .catch((error) => {
+        console.error("Error loading 3-month data:", error);
+        alert("Error loading 3-month usage data. Please try again.");
+      })
+      .finally(() => {
+        loadingOverlay.style.display = "none";
+      });
+  }
+
+  // Render 3-month usage chart
+  function renderThreeMonthChart(data) {
+    const ctx = document
+      .getElementById("threeMonthUsageChart")
+      .getContext("2d");
+
+    // Destroy existing chart if it exists
+    if (threeMonthChart) {
+      threeMonthChart.destroy();
+    }
+
+    const labels = data.map((item) => item.month_short + " " + item.year);
+    const usageCounts = data.map((item) => item.usage_count);
+
+    threeMonthChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: "Usage Entries",
+            data: usageCounts,
+            backgroundColor: [
+              "rgba(54, 162, 235, 0.8)",
+              "rgba(75, 192, 192, 0.8)",
+              "rgba(255, 206, 86, 0.8)",
+            ],
+            borderColor: [
+              "rgba(54, 162, 235, 1)",
+              "rgba(75, 192, 192, 1)",
+              "rgba(255, 206, 86, 1)",
+            ],
+            borderWidth: 2,
+            borderRadius: 8,
+            borderSkipped: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: false,
+          },
+          tooltip: {
+            callbacks: {
+              title: function (context) {
+                const index = context[0].dataIndex;
+                return data[index].month;
+              },
+              label: function (context) {
+                return `Usage Entries: ${context.parsed.y.toLocaleString()}`;
+              },
+            },
+          },
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            ticks: {
+              callback: function (value) {
+                return value.toLocaleString();
+              },
+            },
+            grid: {
+              color: "rgba(0, 0, 0, 0.1)",
+            },
+          },
+          x: {
+            grid: {
+              display: false,
+            },
+          },
+        },
+        animation: {
+          duration: 1000,
+          easing: "easeInOutQuart",
+        },
+      },
+    });
+  }
 </script>
 {% endblock %}
