@@ -1667,7 +1667,7 @@ def bulk_report(request):
 
                         if not product_data and include_products:
                             messages.warning(request, f"No data found for subscriber {subscriber_name} between {start_date_display} and {end_date_display}.")
-                            return render(request, 'bulkrep/bulk_report.html', context)
+                            continue
 
                         # Generate Excel report
                         try:
