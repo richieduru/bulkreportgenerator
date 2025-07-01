@@ -20,15 +20,15 @@ from openpyxl.drawing.image import Image
 import os.path
 import uuid
 from django.urls import reverse
-from django.contrib.auth.decorators import login_required
-from decimal import Decimal
+from django.contrib.auth.decorators import login_required,user_passes_test
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from django.db.models import Q
-from django.db.models import Min
-from datetime import date
 from django.core.cache import cache
 import hashlib
+from django.db.models import DateField
+from django.db.models.functions import Cast
+from django.db.models import Exists, OuterRef
+import csv
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__)
@@ -931,7 +931,15 @@ def single_report(request):
                         safe_cell_assignment(current_sheet, current_row, 4, "")  # Unique Tracking Number column left blank
                         safe_cell_assignment(current_sheet, current_row, 5, record['SubscriberName'])
                         safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
-                        safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
+                        # Format SubscriberEnquiryDate
+                        subscriber_enquiry_date = record['SubscriberEnquiryDate']
+                        if subscriber_enquiry_date:
+                            if isinstance(subscriber_enquiry_date, str):
+                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date)
+                            else:
+                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date.strftime('%Y-%m-%d'))
+                        else:
+                            safe_cell_assignment(current_sheet, current_row, 10, "")
                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
                         # Format DetailsViewedDate to match SubscriberEnquiryDate format
                         details_viewed_date = record['DetailsViewedDate']
@@ -1229,7 +1237,7 @@ def copy_merged_and_center(ws, template_ws, template_row_start, template_row_end
             if hasattr(template_cell, 'alignment') and template_cell.alignment and template_cell.alignment.horizontal == 'center':
                 target_cell = ws.cell(row=target_row_start + (row - template_row_start), column=col)
                 # Set center alignment
-                from openpyxl.styles import Alignment
+ 
                 target_cell.alignment = Alignment(horizontal='center', vertical=template_cell.alignment.vertical)
 
 # Helper function to merge and center header columns
@@ -1496,6 +1504,8 @@ def get_subscriber_product_rate_safe(subscriber_name, product_name, default_rate
         logger.debug(f"Using default rate after error: {rate}")
         return rate
 
+        
+@login_required
 def bulk_report(request):
     """View for generating bulk reports."""
     # Get the current date range (first day of current month to first day of next month)
@@ -1667,7 +1677,7 @@ def bulk_report(request):
 
                         if not product_data and include_products:
                             messages.warning(request, f"No data found for subscriber {subscriber_name} between {start_date_display} and {end_date_display}.")
-                            return render(request, 'bulkrep/bulk_report.html', context)
+                            continue
 
                         # Generate Excel report
                         try:
@@ -2351,7 +2361,15 @@ def bulk_report(request):
                                         safe_cell_assignment(current_sheet, current_row, 4, "")  # Unique Tracking Number column left blank
                                         safe_cell_assignment(current_sheet, current_row, 5, record['SubscriberName'])
                                         safe_cell_assignment(current_sheet, current_row, 7, record['SystemUser'] if record['SystemUser'] else "")
-                                        safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'])
+                                        # Format SubscriberEnquiryDate
+                                        subscriber_enquiry_date = record['SubscriberEnquiryDate']
+                                        if subscriber_enquiry_date:
+                                            if isinstance(subscriber_enquiry_date, str):
+                                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date)
+                                            else:
+                                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date.strftime('%Y-%m-%d'))
+                                        else:
+                                            safe_cell_assignment(current_sheet, current_row, 10, "")
                                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
                                         # Format DetailsViewedDate to match SubscriberEnquiryDate format
                                         details_viewed_date = record['DetailsViewedDate']
@@ -2446,7 +2464,7 @@ def bulk_report(request):
 
 
 # Dashboard Views
-from django.contrib.auth.decorators import user_passes_test
+
 
 @login_required
 @user_passes_test(lambda u: u.is_superuser)
@@ -2457,13 +2475,16 @@ def dashboard(request):
     }
     return render(request, 'bulkrep/dashboard.html', context)
 
-
 def dashboard_api(request):
     """API endpoint for dashboard data with caching"""
     
-    # Check if user is authenticated
+    # Check authentication for AJAX requests
     if not request.user.is_authenticated:
         return JsonResponse({'error': 'Authentication required'}, status=401)
+    
+    # Check if user is superuser
+    if not request.user.is_superuser:
+        return JsonResponse({'error': 'Insufficient permissions'}, status=403)
     
     try:
         # Get date range from request
@@ -2540,6 +2561,13 @@ def dashboard_api(request):
         new_subscribers_days = request.GET.get('new_subscribers_days')
         churn_days = request.GET.get('churn_days')
         
+        # Validate subscriber_filter to prevent potential issues
+        if subscriber_filter:
+            # Remove any potentially dangerous characters and limit length
+            subscriber_filter = subscriber_filter.strip()[:100]
+            if not subscriber_filter or subscriber_filter.lower() == 'null':
+                subscriber_filter = None
+        
         # Final debug logging before calculations
         print(f"dashboard_api final dates before calculations: start_date={start_date}, end_date={end_date}")
         print(f"three_month_view={three_month_view}, time_range={time_range}")
@@ -2604,35 +2632,73 @@ def dashboard_api(request):
                 'churn_data': get_churn_data_filtered(start_date, end_date, None),
             }
         else:
-            # Full dashboard with all metrics
-            data = {
-                'total_subscribers': get_total_subscribers(start_date, end_date, subscriber_filter),
-                'total_usage_entries': get_total_usage_entries(start_date, end_date, subscriber_filter),
-                'top_subscriber': get_top_subscriber(start_date, end_date),
-                'top_subscribers': get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filter, limit=10),
-                'top_products': top_products,
-                'churn_data': get_churn_data_filtered(start_date, end_date, churn_days),
-                'usage_trends': get_usage_trends_filtered(start_date, end_date, usage_trends_days),
-                'revenue_data': revenue_data,
-                'new_subscribers': get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days),
-                'retention_rate': get_retention_rate(start_date, end_date),
-                'highest_product_by_transaction': get_highest_product_by_transaction(start_date, end_date),
-                'highest_product_by_revenue': get_highest_product_by_revenue(start_date, end_date),
-                'unique_products': get_unique_products(),
-                'unique_subscribers': get_unique_subscribers(),
-                # --- NEW: daily comparison metric ---
-                'daily_comparison': get_daily_comparison(subscriber_filter),
-            }
+            # Full dashboard with optimized metrics based on subscriber filter
+            if subscriber_filter and subscriber_filter != 'all':
+                # Optimized metrics for subscriber filtering - skip unnecessary global calculations
+                data = {
+                    'total_subscribers': 1,  # Always 1 when filtering by specific subscriber
+                    'total_usage_entries': get_total_usage_entries(start_date, end_date, subscriber_filter),
+                    'top_subscribers': get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filter, limit=10),
+                    'top_products': top_products,
+                    'churn_data': get_churn_data_filtered(start_date, end_date, churn_days),
+                    'usage_trends': get_usage_trends_filtered(start_date, end_date, usage_trends_days, subscriber_filter),
+                    'revenue_data': revenue_data,
+                    'new_subscribers': get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days),
+                    'retention_rate': get_retention_rate(start_date, end_date),  # TODO: Make subscriber-specific
+                    'highest_product_by_transaction': get_highest_product_by_transaction(start_date, end_date),  # TODO: Make subscriber-specific
+                    'highest_product_by_revenue': get_highest_product_by_revenue(start_date, end_date),  # TODO: Make subscriber-specific
+                    'daily_comparison': get_daily_comparison(subscriber_filter),
+                    # Skip these unnecessary calls when filtering by subscriber:
+                    # 'top_subscriber': not needed when filtering by specific subscriber
+                    # 'unique_products': should use subscriber-specific products
+                    # 'unique_subscribers': not needed when filtering by specific subscriber
+                }
+            else:
+                # Full dashboard with all metrics for global view
+                data = {
+                    'total_subscribers': get_total_subscribers(start_date, end_date, subscriber_filter),
+                    'total_usage_entries': get_total_usage_entries(start_date, end_date, subscriber_filter),
+                    'top_subscriber': get_top_subscriber(start_date, end_date),
+                    'top_subscribers': get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filter, limit=10),
+                    'top_products': top_products,
+                    'churn_data': get_churn_data_filtered(start_date, end_date, churn_days),
+                    'usage_trends': get_usage_trends_filtered(start_date, end_date, usage_trends_days, subscriber_filter),
+                    'revenue_data': revenue_data,
+                    'new_subscribers': get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days),
+                    'retention_rate': get_retention_rate(start_date, end_date),
+                    'highest_product_by_transaction': get_highest_product_by_transaction(start_date, end_date),
+                    'highest_product_by_revenue': get_highest_product_by_revenue(start_date, end_date),
+                    'unique_products': get_unique_products(),
+                    'unique_subscribers': get_unique_subscribers(),
+                    'daily_comparison': get_daily_comparison(subscriber_filter),
+                }
+        
+        # Debug daily comparison result
+        if settings.DEBUG and 'daily_comparison' in data:
+            print(f"Dashboard API - daily_comparison result: {data['daily_comparison']}")
         
         # 3-month usage data is already included in the data dictionary above
         
         # Cache the data for 5 minutes (300 seconds)
         cache.set(cache_key, data, 300)
         
-        return JsonResponse(data)
+        # Ensure proper JSON response with explicit content type
+        response = JsonResponse(data)
+        response['Content-Type'] = 'application/json'
+        return response
     except Exception as e:
-        logger.error(f"Dashboard API error: {str(e)}")
-        return JsonResponse({'error': str(e)}, status=500)
+        # Log the full error for debugging
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Dashboard API error: {str(e)}\nFull traceback: {error_details}")
+        
+        # Return a user-friendly error message
+        error_response = JsonResponse({
+            'error': 'An error occurred while loading dashboard data. Please try again or contact support.',
+            'debug_message': str(e) if settings.DEBUG else None
+        }, status=500)
+        error_response['Content-Type'] = 'application/json'
+        return error_response
 
 
 # Dashboard Helper Functions
@@ -2738,8 +2804,7 @@ def get_churn_data(start_date, end_date):
 
 def get_usage_trends(start_date, end_date):
     """Get daily usage trends"""
-    from django.db.models import DateField
-    from django.db.models.functions import Cast
+
     
     return list(Usagereport.objects.filter(
         DetailsViewedDate__range=[start_date, end_date]
@@ -2781,38 +2846,7 @@ def get_revenue_data(start_date, end_date):
     return sorted(revenue_data, key=lambda x: x['revenue'], reverse=True)
 
 
-def get_new_subscribers_trend(start_date, end_date):
-    """Get new subscribers trend over time"""
-    # This is a simplified version - in reality you'd need a subscriber registration date
-    # For now, we'll use first usage date as proxy for "new" subscriber
-    
-    new_subscribers_by_date = []
-    current_date = start_date
-    
-    while current_date <= end_date:
-        # Get subscribers who first appeared on this date
-        subscribers_on_date = Usagereport.objects.filter(
-            DetailsViewedDate=current_date
-        ).values_list('SubscriberName', flat=True).distinct()
-        
-        # Check if this is their first appearance in our data
-        new_count = 0
-        for subscriber in subscribers_on_date:
-            first_usage = Usagereport.objects.filter(
-                SubscriberName=subscriber
-            ).order_by('DetailsViewedDate').first()
-            
-            if first_usage and first_usage.DetailsViewedDate == current_date:
-                new_count += 1
-        
-        new_subscribers_by_date.append({
-            'date': current_date.strftime('%Y-%m-%d'),
-            'new_subscribers': new_count
-        })
-        
-        current_date += timedelta(days=1)
-    
-    return new_subscribers_by_date
+# Function removed - was unused and inefficient
 
 
 def get_retention_rate(start_date, end_date):
@@ -2849,7 +2883,7 @@ def get_top_subscribers_by_usage_filtered(start_date, end_date, subscriber_filte
         
         # Apply subscriber filter if provided
         if subscriber_filter and subscriber_filter != 'all':
-            queryset = queryset.filter(SubscriberName__icontains=subscriber_filter)
+            queryset = queryset.filter(SubscriberName=subscriber_filter)
         
         all_subscribers = queryset.values('SubscriberName').annotate(
             usage_count=Count('SearchIdentity')
@@ -2889,7 +2923,7 @@ def get_top_products_by_frequency_filtered(start_date, end_date, product_filter=
 def get_churn_data_filtered(start_date, end_date, churn_days=None):
     """Get churn data with optional day filtering - OPTIMIZED"""
     try:
-        from django.db.models import Exists, OuterRef
+
         
         # Use custom days if provided, otherwise use default logic
         if churn_days and churn_days.isdigit():
@@ -3006,9 +3040,7 @@ def get_churned_subscribers_list(start_date, end_date, churn_days=None):
 
 def download_churned_subscribers(request):
     """Download churned subscribers as CSV file"""
-    import csv
-    from django.http import HttpResponse
-    from datetime import datetime
+
     
     try:
         # Get date range from request
@@ -3055,8 +3087,92 @@ def download_churned_subscribers(request):
         return HttpResponse(f"Error: {str(e)}", status=500)
 
 
-def get_usage_trends_filtered(start_date, end_date, usage_trends_days=None):
-    """Get usage trends with optional day filtering"""
+def download_new_subscribers(request):
+    """Download new subscribers as TXT file with subscriber names and join dates"""
+    from django.http import HttpResponse
+    from datetime import datetime
+    
+    try:
+        # Get date range from request
+        start_date_str = request.GET.get('start_date', None)
+        end_date_str = request.GET.get('end_date', None)
+        
+        # Parse dates or use defaults
+        if start_date_str:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        else:
+            # Default to 30 days ago
+            today = timezone.now().date()
+            start_date = today - timedelta(days=30)
+            
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        else:
+            # Default to today
+            end_date = timezone.now().date()
+        
+        # Get new subscribers details with names and join dates
+        new_subscribers_details = get_new_subscribers_details(start_date, end_date)
+        
+        # Create TXT response
+        response = HttpResponse(content_type='text/plain')
+        response['Content-Disposition'] = f'attachment; filename="new_subscribers_{start_date}_{end_date}.txt"'
+        
+        # Write header
+        content = f"New Subscribers Report\n"
+        content += f"Date Range: {start_date} to {end_date}\n"
+        content += f"Total New Subscribers: {len(new_subscribers_details)}\n\n"
+        content += f"{'Subscriber Name':<50} {'Date Joined':<15}\n"
+        content += f"{'-' * 50} {'-' * 15}\n"
+        
+        # Write subscriber details
+        for subscriber in new_subscribers_details:
+            content += f"{subscriber['name']:<50} {subscriber['date_joined']:<15}\n"
+        
+        response.write(content)
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error downloading new subscribers: {str(e)}")
+        return HttpResponse(f"Error: {str(e)}", status=500)
+
+
+def new_subscribers_trend_api(request):
+    """API endpoint for new subscribers trend data with custom date range"""
+    try:
+        # Get date range from request
+        start_date_str = request.GET.get('start_date', None)
+        end_date_str = request.GET.get('end_date', None)
+        
+        if not start_date_str or not end_date_str:
+            return JsonResponse({'error': 'Both start_date and end_date are required'}, status=400)
+        
+        # Parse dates
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        
+        # Validate date range
+        if start_date > end_date:
+            return JsonResponse({'error': 'Start date cannot be later than end date'}, status=400)
+        
+        # Get new subscribers data
+        new_subscribers_data = get_new_subscribers_trend_optimized(start_date, end_date)
+        
+        return JsonResponse({
+            'new_subscribers': new_subscribers_data,
+            'start_date': start_date_str,
+            'end_date': end_date_str
+        })
+        
+    except ValueError as e:
+        return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in new subscribers trend API: {str(e)}")
+        return JsonResponse({'error': 'Internal server error'}, status=500)
+
+
+def get_usage_trends_filtered(start_date, end_date, usage_trends_days=None, subscriber_filter=None):
+    """Get usage trends with optional day filtering and subscriber filtering"""
     try:
         # Use custom days if provided, otherwise use the full range
         if usage_trends_days and usage_trends_days.isdigit():
@@ -3065,12 +3181,16 @@ def get_usage_trends_filtered(start_date, end_date, usage_trends_days=None):
         else:
             trends_start = start_date
         
-        from django.db.models import DateField
-        from django.db.models.functions import Cast
-        
-        return list(Usagereport.objects.filter(
+        # Build the query with date range filter
+        query = Usagereport.objects.filter(
             DetailsViewedDate__range=[trends_start, end_date]
-        ).extra({
+        )
+        
+        # Apply subscriber filter if provided
+        if subscriber_filter and subscriber_filter != 'all':
+            query = query.filter(SubscriberName=subscriber_filter)
+        
+        return list(query.extra({
             'date': "CAST(DetailsViewedDate AS DATE)"
         }).values('date').annotate(
             count=Count('SearchIdentity')
@@ -3419,20 +3539,128 @@ def get_top_products_by_subscriber_filtered(start_date, end_date, subscriber_nam
         return []
 
 
+def get_new_subscribers_details(start_date, end_date):
+    """Get detailed list of new subscribers with names and join dates"""
+    try:
+        from datetime import datetime, date
+
+        # Ensure start_date and end_date are consistently date objects
+        if isinstance(start_date, datetime):
+            start_date = start_date.date()
+        elif isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+
+        if isinstance(end_date, datetime):
+            end_date = end_date.date()
+        elif isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+        # Get first usage date for each subscriber with their names
+        new_subscribers = Usagereport.objects.values('SubscriberName').annotate(
+            first_usage=Min('DetailsViewedDate')
+        ).filter(
+            first_usage__range=[start_date, end_date]
+        ).order_by('first_usage', 'SubscriberName')
+
+        # Format the results
+        subscribers_details = []
+        for item in new_subscribers:
+            first_usage = item['first_usage']
+            if first_usage is None:
+                continue
+
+            # Ensure first_usage is a date object
+            if isinstance(first_usage, datetime):
+                first_usage = first_usage.date()
+            elif isinstance(first_usage, str):
+                first_usage = datetime.strptime(first_usage.split(' ')[0], '%Y-%m-%d').date()
+            
+            if isinstance(first_usage, date):
+                subscribers_details.append({
+                    'name': item['SubscriberName'],
+                    'date_joined': first_usage.strftime('%Y-%m-%d')
+                })
+        
+        return subscribers_details
+    except Exception as e:
+        logger.error(f"Error getting new subscribers details: {str(e)}")
+        return []
+
+
+def get_new_subscribers_trend_optimized(start_date, end_date):
+    """Get new subscribers trend - OPTIMIZED version without day filtering"""
+    try:
+        
+
+        # Ensure start_date and end_date are consistently date objects
+        if isinstance(start_date, datetime):
+            start_date = start_date.date()
+        elif isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
+
+        if isinstance(end_date, datetime):
+            end_date = end_date.date()
+        elif isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
+
+        # Single query to get first usage date for each subscriber
+        first_usage_dates = Usagereport.objects.values('SubscriberName').annotate(
+            first_usage=Min('DetailsViewedDate')
+        ).filter(
+            first_usage__range=[start_date, end_date]
+        )
+
+        # Group by date
+        trend_data = {}
+        for item in first_usage_dates:
+            first_usage = item['first_usage']
+            if first_usage is None:
+                continue
+
+            # Defensively ensure first_usage is a date object before calling strftime
+            if isinstance(first_usage, datetime):
+                first_usage = first_usage.date()
+            elif isinstance(first_usage, str):
+                # If the database returns a string, convert it. This handles formats like 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+                first_usage = datetime.strptime(first_usage.split(' ')[0], '%Y-%m-%d').date()
+            
+            # Now we can safely call strftime
+            if isinstance(first_usage, date):
+                date_key = first_usage.strftime('%Y-%m-%d')
+                trend_data[date_key] = trend_data.get(date_key, 0) + 1
+        
+        # Create complete date range with zero counts for missing dates
+        new_subscribers_by_date = []
+        current_date = start_date
+        
+        # The redundant checks inside the loop have been removed for cleanliness and efficiency.
+        while current_date <= end_date:
+            date_key = current_date.strftime('%Y-%m-%d')
+            new_subscribers_by_date.append({
+                'date': date_key,
+                'new_subscribers': trend_data.get(date_key, 0)
+            })
+            current_date += timedelta(days=1)
+        
+        return new_subscribers_by_date
+    except Exception as e:
+        logger.error(f"Error getting new subscribers trend optimized: {str(e)}")
+        return []
+
+
 def get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_days=None):
     """Get new subscribers trend with optional day filtering - OPTIMIZED"""
     try:
-        
-        # Ensure start_date and end_date are date objects
-        if isinstance(start_date, str):
-            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-        elif hasattr(start_date, 'date'):
+        # Ensure start_date and end_date are consistently date objects
+        if isinstance(start_date, datetime):
             start_date = start_date.date()
+        elif isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
             
-        if isinstance(end_date, str):
-            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-        elif hasattr(end_date, 'date'):
+        if isinstance(end_date, datetime):
             end_date = end_date.date()
+        elif isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
         
         # Use custom days if provided, otherwise use the full range
         if new_subscribers_days and new_subscribers_days.isdigit():
@@ -3451,21 +3679,26 @@ def get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_day
         # Group by date
         trend_data = {}
         for item in first_usage_dates:
-            date_key = item['first_usage'].strftime('%Y-%m-%d')
-            trend_data[date_key] = trend_data.get(date_key, 0) + 1
+            first_usage = item['first_usage']
+            if first_usage is None:
+                continue
+
+            # Defensively ensure first_usage is a date object before calling strftime
+            if isinstance(first_usage, datetime):
+                first_usage = first_usage.date()
+            elif isinstance(first_usage, str):
+                first_usage = datetime.strptime(first_usage.split(' ')[0], '%Y-%m-%d').date()
+            
+            if isinstance(first_usage, date):
+                date_key = first_usage.strftime('%Y-%m-%d')
+                trend_data[date_key] = trend_data.get(date_key, 0) + 1
         
         # Create complete date range with zero counts for missing dates
         new_subscribers_by_date = []
         current_date = trends_start
         
+        # The redundant checks inside the loop have been removed.
         while current_date <= end_date:
-            # Ensure current_date is a date object
-            if isinstance(current_date, str):
-                current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
-            elif hasattr(current_date, 'date'):
-                # It's a datetime object, convert to date
-                current_date = current_date.date()
-            
             date_key = current_date.strftime('%Y-%m-%d')
             new_subscribers_by_date.append({
                 'date': date_key,
@@ -3477,6 +3710,7 @@ def get_new_subscribers_trend_filtered(start_date, end_date, new_subscribers_day
     except Exception as e:
         logger.error(f"Error getting filtered new subscribers trend: {str(e)}")
         return []
+
 
 
 def get_highest_product_by_transaction(start_date, end_date):
@@ -3524,8 +3758,7 @@ def get_highest_product_by_revenue(start_date, end_date):
 def get_three_month_rolling_usage(subscriber_filter=None):
     """Get usage data for the current month and two previous months, broken down by month"""
     try:
-        from datetime import datetime
-        import calendar
+
         
         today = timezone.now().date()
         current_month_start = today.replace(day=1)
@@ -3584,41 +3817,97 @@ def get_three_month_rolling_usage(subscriber_filter=None):
 
 
     # return render(request, 'bulkrep/bulk_report.html', context)
-
-# --- NEW: Helper for daily comparison ---
 def get_daily_comparison(subscriber_filter=None):
     """
-    Returns usage counts for today and the same day last month.
+    Returns usage counts for the previous day and the same day of the previous month.
+    e.g., if today is June 25th, it compares usage for June 24th vs May 24th.
     """
-    today = timezone.now().date()
-    # Get the same day last month
-    if today.month == 1:
-        prev_month = 12
-        prev_year = today.year - 1
-    else:
-        prev_month = today.month - 1
-        prev_year = today.year
-    # Handle day overflow (e.g., Feb 30th)
-    try:
-        prev_month_day = today.replace(year=prev_year, month=prev_month)
-    except ValueError:
-        # Use last day of previous month
-        import calendar
-        last_day = calendar.monthrange(prev_year, prev_month)[1]
-        prev_month_day = today.replace(year=prev_year, month=prev_month, day=last_day)
+    yesterday = (timezone.now() - timedelta(days=1)).date()
 
-    query_today = Usagereport.objects.filter(DetailsViewedDate=today)
+    if yesterday.month == 1:
+        prev_month_year = yesterday.year - 1
+        prev_month = 12
+    else:
+        prev_month_year = yesterday.year
+        prev_month = yesterday.month - 1
+
+    # Handle cases where the day doesn't exist in the previous month (e.g., 31st)
+    last_day_of_prev_month = calendar.monthrange(prev_month_year, prev_month)[1]
+    day_to_use = min(yesterday.day, last_day_of_prev_month)
+
+    prev_month_day = date(prev_month_year, prev_month, day_to_use)
+
+    # Query usage for yesterday and the corresponding day last month
+    query_yesterday = Usagereport.objects.filter(DetailsViewedDate=yesterday)
     query_prev = Usagereport.objects.filter(DetailsViewedDate=prev_month_day)
+
+    # Apply subscriber filter if provided
     if subscriber_filter and subscriber_filter != 'all':
-        query_today = query_today.filter(SubscriberName=subscriber_filter)
+        query_yesterday = query_yesterday.filter(SubscriberName=subscriber_filter)
         query_prev = query_prev.filter(SubscriberName=subscriber_filter)
+
+    yesterday_count = query_yesterday.count()
+    prev_count = query_prev.count()
+    
+    # Debug logging
+    if settings.DEBUG:
+        print(f"Daily Comparison Debug:")
+        print(f"Yesterday date: {yesterday}")
+        print(f"Previous month same day: {prev_month_day}")
+        print(f"Yesterday count: {yesterday_count}")
+        print(f"Previous month count: {prev_count}")
+        print(f"Subscriber filter: {subscriber_filter}")
+        
+        # Check if there's any data around these dates
+        recent_data = Usagereport.objects.filter(
+            DetailsViewedDate__gte=yesterday - timedelta(days=7),
+            DetailsViewedDate__lte=yesterday + timedelta(days=1)
+        ).count()
+        print(f"Data in last 7 days: {recent_data}")
+
     return {
-        'today': {
-            'date': today.strftime('%Y-%m-%d'),
-            'count': query_today.count(),
+        'yesterday': {
+            'date': yesterday.strftime('%Y-%m-%d'),
+            'count': yesterday_count,
         },
-        'previous_month': {
+        'previous_month_same_day': {
             'date': prev_month_day.strftime('%Y-%m-%d'),
-            'count': query_prev.count(),
+            'count': prev_count,
         }
     }
+# --- NEW: Helper for daily comparison ---
+# def get_daily_comparison(subscriber_filter=None):
+#     """
+#     Returns usage counts for today and the same day last month.
+#     """
+#     today = timezone.now().date()
+#     # Get the same day last month
+#     if today.month == 1:
+#         prev_month = 12
+#         prev_year = today.year - 1
+#     else:
+#         prev_month = today.month - 1
+#         prev_year = today.year
+#     # Handle day overflow (e.g., Feb 30th)
+#     try:
+#         prev_month_day = today.replace(year=prev_year, month=prev_month)
+#     except ValueError:
+#         # Use last day of previous month
+#         last_day = calendar.monthrange(prev_year, prev_month)[1]
+#         prev_month_day = today.replace(year=prev_year, month=prev_month, day=last_day)
+
+#     query_today = Usagereport.objects.filter(DetailsViewedDate__date=today)
+#     query_prev = Usagereport.objects.filter(DetailsViewedDate__date=prev_month_day)
+#     if subscriber_filter and subscriber_filter != 'all':
+#         query_today = query_today.filter(SubscriberName=subscriber_filter)
+#         query_prev = query_prev.filter(SubscriberName=subscriber_filter)
+#     return {
+#         'today': {
+#             'date': today.strftime('%Y-%m-%d'),
+#             'count': query_today.count(),
+#         },
+#         'previous_month': {
+#             'date': prev_month_day.strftime('%Y-%m-%d'),
+#             'count': query_prev.count(),
+#         }
+#     }
