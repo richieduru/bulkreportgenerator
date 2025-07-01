@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +22,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-)@2t7ebu%$_z@m2p8bkevc3mh3!#opc_(mncfzjrs=w*c=%t_o'
+SECRET_KEY = config('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = []
 
@@ -99,12 +101,12 @@ WSGI_APPLICATION = 'report.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'mssql',
-        'NAME': 'BureauenquiryAnalytic',
-        'HOST': '192.168.1.11',
-        'USER': 'sa',
-        'PASSWORD': 'p@ssw0rd',
-        'PORT': '',
+        'ENGINE': config('DB_ENGINE'),
+        'NAME': config('DB_NAME'),
+        'HOST': config('DB_HOST'),
+        'USER': config('DB_USER'),
+        'PASSWORD': config('DB_PASSWORD'),
+        'PORT': config('DB_PORT', default=''),
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
             'Trusted_connection': 'yes',
@@ -194,10 +196,10 @@ CACHE_MIDDLEWARE_KEY_PREFIX = 'bulkrep'
 
 # Email configuration for password reset and notifications
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.example.com'  # Replace with your SMTP server
-EMAIL_PORT = 587
-EMAIL_HOST_USER = 'your_email@example.com'  # Replace with your SMTP username
-EMAIL_HOST_PASSWORD = 'your_password'       # Replace with your SMTP password
+EMAIL_HOST = config('EMAIL_HOST')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = 'Report Generator <noreply@example.com>'
 
