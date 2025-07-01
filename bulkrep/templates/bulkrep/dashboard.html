@@ -250,7 +250,7 @@
           </div>
 
           <button id="applyBtn" class="btn btn-refresh" disabled>
-            <i class="fas fa-play me-1"></i> Load Dashboard
+            <i class="fas fa-check me-1"></i> Apply Changes
           </button>
           <button id="refreshBtn" class="btn btn-outline-secondary">
             <i class="fas fa-sync-alt me-1"></i> Refresh
@@ -664,20 +664,15 @@
   class DashboardManager {
     constructor() {
       this.charts = {};
-      this.dataLoaded = false;
       this.init();
     }
 
     init() {
       this.initializeDateInputs();
+      this.loadData();
       this.setupEventListeners();
-      this.showWelcomeMessage();
-      // Auto-refresh every 24 hours (daily) - only if data is already loaded
-      setInterval(() => {
-        if (this.dataLoaded) {
-          this.loadData();
-        }
-      }, 86400000);
+      // Auto-refresh every 24 hours (daily)
+      setInterval(() => this.loadData(), 86400000);
     }
 
     setupEventListeners() {
@@ -782,22 +777,6 @@
       loadingOverlay.classList.add("hidden");
     }
 
-    showWelcomeMessage() {
-      // Display welcome message and instructions
-      document.getElementById("totalSubscribers").textContent = "Welcome!";
-      document.getElementById("totalUsage").textContent = "Click Load";
-      document.getElementById("totalRevenue").textContent = "Dashboard to";
-      document.getElementById("topSubscriber").textContent = "Get Started";
-      document.getElementById("retentionRate").textContent = "📊";
-      document.getElementById("highestProductByTransaction").textContent = "Ready";
-      document.getElementById("highestProductByRevenue").textContent = "to Load";
-      document.getElementById("yesterdayUsage").textContent = "📈";
-      document.getElementById("prevMonthSameDayUsage").textContent = "📈";
-      
-      // Enable the apply button
-      document.getElementById("applyBtn").disabled = false;
-    }
-
     async loadData() {
       const startDate = document.getElementById("startDate").value;
       const endDate = document.getElementById("endDate").value;
@@ -896,7 +875,6 @@
         this.updateMetrics(safeData);
         this.updateCharts(safeData);
         this.updateLastUpdated();
-        this.dataLoaded = true;
       } catch (error) {
         console.error("Error loading dashboard data:", error);
 
@@ -2056,14 +2034,6 @@
     applyDateChanges() {
       this.loadData();
       this.disableApplyButton();
-      
-      // Change button text to 'Apply Changes' after first load
-      if (!this.dataLoaded) {
-        setTimeout(() => {
-          const applyBtn = document.getElementById("applyBtn");
-          applyBtn.innerHTML = '<i class="fas fa-check me-1"></i> Apply Changes';
-        }, 1000);
-      }
     }
 
     enableApplyButton() {
