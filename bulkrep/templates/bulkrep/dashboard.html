@@ -103,26 +103,27 @@
   }
 
   .loading-overlay {
-    position: sticky; /* Changed from fixed to absolute */
-    top: 10px; /* Position from the top of its container */
-    left: 50%; /* Center horizontally */
-    transform: translateX(-50%); /* Adjust for centering */
-    width: auto; /* Adjust width to content */
-    height: auto; /* Adjust height to content */
-    padding: 10px 20px; /* Add some padding */
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: auto;
+    height: auto;
+    padding: 20px 30px;
     background: linear-gradient(
       135deg,
-      rgba(102, 126, 234, 0.15) 0%,
-      rgba(118, 75, 162, 0.15) 100%
+      rgba(102, 126, 234, 0.35) 0%,
+      rgba(118, 75, 162, 0.35) 100%
     );
     display: flex;
     justify-content: center;
     align-items: center;
     z-index: 9999;
-    font-size: 1rem; /* Smaller font */
+    font-size: 1rem;
     color: #667eea;
-    border-radius: 8px; /* Rounded corners */
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1); /* Add a subtle shadow */
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(5px);
   }
 
   .loading-overlay.hidden {
@@ -227,13 +228,11 @@
         <div class="d-flex gap-3 align-items-center flex-wrap">
           <label class="form-label mb-0 fw-bold">Date Range:</label>
 
-          <!-- Preset Date Range Dropdown -->
           <select id="datePreset" class="form-select" style="width: 200px">
             <option value="custom">Custom Range</option>
             <option value="alltime">All Time</option>
           </select>
 
-          <!-- Custom Date Inputs -->
           <div class="d-flex gap-2 align-items-center" id="customDateInputs">
             <div class="input-group" style="width: 150px">
               <input type="date" id="startDate" class="form-control" />
@@ -251,14 +250,13 @@
           </div>
 
           <button id="applyBtn" class="btn btn-refresh" disabled>
-            <i class="fas fa-check me-1"></i> Apply Changes
+            <i class="fas fa-play me-1"></i> Load Dashboard
           </button>
           <button id="refreshBtn" class="btn btn-outline-secondary">
             <i class="fas fa-sync-alt me-1"></i> Refresh
           </button>
         </div>
 
-        <!-- Display Current Range -->
         <div class="mt-2">
           <small class="text-info">
             <i class="fas fa-info-circle me-1"></i>
@@ -274,7 +272,6 @@
     </div>
   </div>
 
-  <!-- Global Filters -->
   <div class="row mb-4">
     <div class="col-12">
       <div class="controls-section">
@@ -285,9 +282,14 @@
                 <label for="globalSubscriberFilter" class="form-label mb-1"
                   >Filter by Subscriber:</label
                 >
-                <select id="globalSubscriberFilter" class="form-select">
-                  <option value="all">All Subscribers</option>
-                </select>
+                <div class="d-flex gap-2 align-items-end">
+                  <select id="globalSubscriberFilter" class="form-select">
+                    <option value="all">All Subscribers</option>
+                  </select>
+                  <button id="applySubscriberFilterBtn" class="btn btn-primary">
+                    Apply
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -301,7 +303,6 @@
     </div>
   </div>
 
-  <!-- Metrics Cards -->
   <div class="row mb-4">
     <div class="col-lg-3 col-md-6">
       <div class="metric-card">
@@ -329,7 +330,6 @@
     </div>
   </div>
 
-  <!-- Additional Metrics Row -->
   <div class="row mb-4">
     <div class="col-lg-3 col-md-6">
       <div class="metric-card">
@@ -347,31 +347,32 @@
       </div>
     </div>
     <div class="col-lg-3 col-md-6">
-      <div class="metric-card top-subscriber">
+      <div class="metric-card">
         <h3 id="highestProductByRevenue">-</h3>
-        <p><i class="fas fa-dollar-sign me-1"></i>Highest Product by Revenue</p>
+        <p>
+          <i class="fas fa-dollar-sign me-1"></i>Highest Product by Revenue
+        </p>
       </div>
     </div>
     <div class="col-lg-3 col-md-6">
       <div class="metric-card" id="dailyComparisonCard">
         <h3>
-          <span id="todayUsage">-</span>
-          <small style="font-size: 1rem">today</small>
+          <span id="yesterdayUsage">-</span>
+          <small style="font-size: 1rem">yesterday</small>
           <span style="font-size: 1.2rem; margin: 0 8px">/</span>
-          <span id="prevMonthUsage">-</span>
+          <span id="prevMonthSameDayUsage">-</span>
           <small style="font-size: 1rem">last month</small>
         </h3>
         <p>
           <i class="fas fa-calendar-day me-1"></i>
           <span id="dailyComparisonLabel"
-            >Today's Usage vs. Same Day Last Month</span
+            >Yesterday's Usage vs. Same Day Last Month</span
           >
         </p>
       </div>
     </div>
   </div>
 
-  <!-- Charts Row 1 -->
   <div class="row mb-4">
     <div class="col-lg-8">
       <div class="chart-container">
@@ -412,19 +413,29 @@
     </div>
   </div>
 
-  <!-- Charts Row 2 -->
   <div class="row mb-4">
     <div class="col-lg-6">
       <div class="chart-container">
         <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-calendar-alt me-2"></i>3-Month Rolling Usage</h5>
-          <button
-            id="load3MonthBtn"
-            class="btn btn-primary btn-sm"
-            onclick="loadThreeMonthData()"
-          >
-            <i class="fas fa-chart-line me-1"></i>Load 3-Month View
-          </button>
+          <div class="d-flex gap-2">
+            <button
+              id="load3MonthBtn"
+              class="btn btn-primary btn-sm"
+              onclick="loadThreeMonthData()"
+            >
+              <i class="fas fa-chart-line me-1"></i>Load 3-Month View
+            </button>
+            <button
+              id="refresh3MonthBtn"
+              class="btn btn-outline-secondary btn-sm"
+              onclick="refreshThreeMonthData()"
+              style="display: none;"
+              title="Refresh 3-Month Data"
+            >
+              <i class="fas fa-sync-alt"></i>
+            </button>
+          </div>
         </div>
         <div id="threeMonthChartContainer" style="display: none">
           <canvas id="threeMonthUsageChart"></canvas>
@@ -458,23 +469,65 @@
     </div>
   </div>
 
-  <!-- Charts Row 3 -->
   <div class="row mb-4">
     <div class="col-lg-6">
       <div class="chart-container">
         <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-user-plus me-2"></i>New Subscribers Trend</h5>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-2 align-items-center">
             <select
               id="newSubscribersTimeFilter"
               class="form-select form-select-sm"
               style="width: 150px"
             >
+              <option value="7">Last 7 days</option>
               <option value="30" selected>Last 30 days</option>
               <option value="90">Last 90 days</option>
               <option value="180">Last 6 months</option>
               <option value="365">Last year</option>
+              <option value="custom">Custom Range</option>
             </select>
+            <button
+              id="downloadNewSubscribersBtn"
+              class="btn btn-outline-secondary btn-sm"
+              title="Download CSV"
+              style="border: none; background: none; color: #6c757d"
+            >
+              <i class="fas fa-download"></i>
+            </button>
+          </div>
+        </div>
+        
+        <div id="newSubscribersDateRange" class="mt-2" style="display: none;">
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <label class="form-label mb-0 me-1" style="font-size: 0.875rem"
+              >Date range:</label
+            >
+            <input
+              type="date"
+              id="newSubscribersStartDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <span class="text-muted">to</span>
+            <input
+              type="date"
+              id="newSubscribersEndDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <button
+              id="applyNewSubscribersDateRange"
+              class="btn btn-primary btn-sm"
+            >
+              Apply
+            </button>
+          </div>
+          <div id="appliedNewSubscribersDateRange" class="mt-2" style="display: none;">
+            <small class="text-muted">
+              <i class="fas fa-calendar-alt me-1"></i>
+              Showing data for: <span id="appliedDateRangeText"></span>
+            </small>
           </div>
         </div>
         <canvas id="newSubscribersChart"></canvas>
@@ -483,7 +536,6 @@
 
     <div class="col-lg-6">
       <div class="chart-container">
-        <!-- Header -->
         <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-user-times me-2"></i>Churn Analysis</h5>
           <button
@@ -496,7 +548,6 @@
           </button>
         </div>
 
-        <!-- Date Range Controls -->
         <div class="">
           <div class="d-flex gap-2 align-items-center flex-wrap">
             <label class="form-label mb-0 me-1" style="font-size: 0.875rem"
@@ -525,7 +576,6 @@
           </div>
         </div>
 
-        <!-- Metrics Row -->
         <div class="row text-center">
           <div class="col-4">
             <div class="p-2">
@@ -547,7 +597,6 @@
           </div>
         </div>
 
-        <!-- Chart Section -->
         <div class="">
           <div class="card">
             <div class="card-header py-2">
@@ -562,7 +611,6 @@
     </div>
   </div>
 
-  <!-- Charts Row 2.5 - Revenue by Product -->
   <div class="row mb-4">
     <div class="col-lg-6">
       <div class="chart-container">
@@ -583,7 +631,6 @@
     </div>
   </div>
 
-  <!-- Quick Actions -->
   <div class="row mt-4">
     <div class="col-12">
       <div class="card">
@@ -617,15 +664,20 @@
   class DashboardManager {
     constructor() {
       this.charts = {};
+      this.dataLoaded = false;
       this.init();
     }
 
     init() {
       this.initializeDateInputs();
-      this.loadData();
       this.setupEventListeners();
-      // Auto-refresh every 24 hours (daily)
-      setInterval(() => this.loadData(), 86400000);
+      this.showWelcomeMessage();
+      // Auto-refresh every 24 hours (daily) - only if data is already loaded
+      setInterval(() => {
+        if (this.dataLoaded) {
+          this.loadData();
+        }
+      }, 86400000);
     }
 
     setupEventListeners() {
@@ -673,29 +725,77 @@
       document
         .getElementById("downloadChurnedBtn")
         .addEventListener("click", () => this.downloadChurnedSubscribers());
+      document
+        .getElementById("downloadNewSubscribersBtn")
+        .addEventListener("click", () => this.downloadNewSubscribers());
+      document
+        .getElementById("applyNewSubscribersDateRange")
+        .addEventListener("click", () => this.applyNewSubscribersDateRange());
+      document
+        .getElementById("newSubscribersStartDate")
+        .addEventListener("change", () => this.validateNewSubscribersDateRange());
+      document
+        .getElementById("newSubscribersEndDate")
+        .addEventListener("change", () => this.validateNewSubscribersDateRange());
 
       // Global filter listeners
       document
         .getElementById("globalSubscriberFilter")
         .addEventListener("change", () => {
-          // Update placeholder to show selected subscriber
+          // Update placeholder to show selected subscriber (without applying filter)
           const selectedValue = document.getElementById(
             "globalSubscriberFilter"
           ).value;
           this.updateSubscriberFilterPlaceholder(selectedValue);
+        });
+      
+      // Add keyboard support for Enter key on dropdown
+      document
+        .getElementById("globalSubscriberFilter")
+        .addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            this.applyGlobalFilters();
+          }
+        });
+      
+      // Apply filter button listener
+      document
+        .getElementById("applySubscriberFilterBtn")
+        .addEventListener("click", () => {
           this.applyGlobalFilters();
         });
+      
       document
         .getElementById("resetFiltersBtn")
         .addEventListener("click", () => this.resetGlobalFilters());
     }
 
     showLoading() {
-      document.getElementById("loadingOverlay").classList.remove("hidden");
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      loadingOverlay.style.display = ""; // Clear any inline styles
+      loadingOverlay.classList.remove("hidden");
     }
 
     hideLoading() {
-      document.getElementById("loadingOverlay").classList.add("hidden");
+      const loadingOverlay = document.getElementById("loadingOverlay");
+      loadingOverlay.style.display = ""; // Clear any inline styles
+      loadingOverlay.classList.add("hidden");
+    }
+
+    showWelcomeMessage() {
+      // Display welcome message and instructions
+      document.getElementById("totalSubscribers").textContent = "Welcome!";
+      document.getElementById("totalUsage").textContent = "Click Load";
+      document.getElementById("totalRevenue").textContent = "Dashboard to";
+      document.getElementById("topSubscriber").textContent = "Get Started";
+      document.getElementById("retentionRate").textContent = "📊";
+      document.getElementById("highestProductByTransaction").textContent = "Ready";
+      document.getElementById("highestProductByRevenue").textContent = "to Load";
+      document.getElementById("yesterdayUsage").textContent = "📈";
+      document.getElementById("prevMonthSameDayUsage").textContent = "📈";
+      
+      // Enable the apply button
+      document.getElementById("applyBtn").disabled = false;
     }
 
     async loadData() {
@@ -724,10 +824,25 @@
           params.append("subscriber_filter", subscriberFilter);
         }
 
-        const response = await fetch(`/dashboard-api/?${params.toString()}`);
+        const response = await fetch(`/dashboard-api/?${params.toString()}`, {
+          credentials: 'same-origin'
+        });
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          // Handle specific HTTP status codes
+          if (response.status === 401) {
+            throw new Error('Authentication required. Please log in.');
+          } else if (response.status === 403) {
+            throw new Error('Insufficient permissions to access dashboard data.');
+          } else {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+        }
+
+        // Check if response is actually JSON
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Server returned non-JSON response. Please check your authentication status.');
         }
 
         const data = await response.json();
@@ -775,11 +890,13 @@
           unique_subscribers: Array.isArray(data.unique_subscribers)
             ? data.unique_subscribers
             : [],
+          daily_comparison: data.daily_comparison || null,
         };
 
         this.updateMetrics(safeData);
         this.updateCharts(safeData);
         this.updateLastUpdated();
+        this.dataLoaded = true;
       } catch (error) {
         console.error("Error loading dashboard data:", error);
 
@@ -789,14 +906,17 @@
           : `Error loading dashboard data: ${error.message}`;
 
         // Update UI to show error state instead of breaking
-        document.getElementById("totalSubscribers").textContent = "Error";
-        document.getElementById("totalUsage").textContent = "Error";
-        document.getElementById("totalRevenue").textContent = "Error";
-        document.getElementById("topSubscriber").textContent = "Error";
-        document.getElementById("highestProductByTransaction").textContent =
-          "Error";
-        document.getElementById("highestProductByRevenue").textContent =
-          "Error";
+        const elements = [
+          "totalSubscribers", "totalUsage", "totalRevenue", "topSubscriber",
+          "highestProductByTransaction", "highestProductByRevenue"
+        ];
+        
+        elements.forEach(elementId => {
+          const element = document.getElementById(elementId);
+          if (element) {
+            element.textContent = "Error";
+          }
+        });
 
         alert(errorMessage);
       } finally {
@@ -805,10 +925,16 @@
     }
 
     updateMetrics(data) {
-      document.getElementById("totalSubscribers").textContent =
-        data.total_subscribers.toLocaleString();
-      document.getElementById("totalUsage").textContent =
-        data.total_usage_entries.toLocaleString();
+      // Add null checks to prevent TypeError
+      const totalSubscribersEl = document.getElementById("totalSubscribers");
+      if (totalSubscribersEl) {
+        totalSubscribersEl.textContent = data.total_subscribers.toLocaleString();
+      }
+      
+      const totalUsageEl = document.getElementById("totalUsage");
+      if (totalUsageEl) {
+        totalUsageEl.textContent = data.total_usage_entries.toLocaleString();
+      }
 
       // Calculate base revenue
       const baseRevenue =
@@ -821,73 +947,117 @@
       const vatAmount = baseRevenue * vatRate;
       const totalRevenue = baseRevenue + vatAmount;
 
-      document.getElementById(
-        "totalRevenue"
-      ).textContent = `₦${totalRevenue.toLocaleString()}`;
+      const totalRevenueEl = document.getElementById("totalRevenue");
+      if (totalRevenueEl) {
+        totalRevenueEl.textContent = `₦${totalRevenue.toLocaleString()}`;
+      }
 
       // Update top subscriber
       const topSubscriber =
         data.top_subscribers && data.top_subscribers.length > 0
           ? data.top_subscribers[0].SubscriberName
           : "N/A";
-      document.getElementById("topSubscriber").textContent =
-        topSubscriber.length > 15
-          ? topSubscriber.substring(0, 15) + "..."
-          : topSubscriber;
+      const topSubscriberEl = document.getElementById("topSubscriber");
+      if (topSubscriberEl) {
+        topSubscriberEl.textContent =
+          topSubscriber.length > 15
+            ? topSubscriber.substring(0, 15) + "..."
+            : topSubscriber;
+      }
 
-      document.getElementById(
-        "retentionRate"
-      ).textContent = `${data.retention_rate.retention_rate}%`;
+      const retentionRateEl = document.getElementById("retentionRate");
+      if (retentionRateEl) {
+        retentionRateEl.textContent = `${data.retention_rate.retention_rate}%`;
+      }
 
       // Update highest product by transaction
       const highestProductByTransaction =
         data.highest_product_by_transaction || "N/A";
-      document.getElementById("highestProductByTransaction").textContent =
-        highestProductByTransaction.length > 15
-          ? highestProductByTransaction.substring(0, 15) + "..."
-          : highestProductByTransaction;
+      const highestProductByTransactionEl = document.getElementById("highestProductByTransaction");
+      if (highestProductByTransactionEl) {
+        highestProductByTransactionEl.textContent =
+          highestProductByTransaction.length > 15
+            ? highestProductByTransaction.substring(0, 15) + "..."
+            : highestProductByTransaction;
+      }
 
       // Update highest product by revenue
       const highestProductByRevenue = data.highest_product_by_revenue || "N/A";
-      document.getElementById("highestProductByRevenue").textContent =
-        highestProductByRevenue.length > 15
-          ? highestProductByRevenue.substring(0, 15) + "..."
-          : highestProductByRevenue;
+      const highestProductByRevenueEl = document.getElementById("highestProductByRevenue");
+      if (highestProductByRevenueEl) {
+        highestProductByRevenueEl.textContent =
+          highestProductByRevenue.length > 15
+            ? highestProductByRevenue.substring(0, 15) + "..."
+            : highestProductByRevenue;
+      }
 
       // Update churn metrics
-      document.getElementById(
-        "churnRate"
-      ).textContent = `${data.churn_data.churn_rate}%`;
-      document.getElementById("churnedCount").textContent =
-        data.churn_data.churned_count.toLocaleString();
-      document.getElementById("activeCount").textContent =
-        data.churn_data.current_subscribers.toLocaleString();
+      const churnRateEl = document.getElementById("churnRate");
+      if (churnRateEl) {
+        churnRateEl.textContent = `${data.churn_data.churn_rate}%`;
+      }
+      
+      const churnedCountEl = document.getElementById("churnedCount");
+      if (churnedCountEl) {
+        churnedCountEl.textContent = data.churn_data.churned_count.toLocaleString();
+      }
+      
+      const activeCountEl = document.getElementById("activeCount");
+      if (activeCountEl) {
+        activeCountEl.textContent = data.churn_data.current_subscribers.toLocaleString();
+      }
 
       // Populate filter dropdowns
       this.populateFilterDropdowns(data);
       this.populateGlobalFilters(data);
 
-      // --- NEW: Daily Comparison Metric ---
+     // --- NEW: Daily Comparison Metric ---
+// --- CORRECTED AND COMPLETE Daily Comparison Metric Logic ---
+      const yesterdayUsageEl = document.getElementById("yesterdayUsage");
+      const prevMonthSameDayUsageEl = document.getElementById("prevMonthSameDayUsage");
+      const dailyComparisonLabelEl = document.getElementById("dailyComparisonLabel");
+      
+      console.log('Daily comparison data:', data.daily_comparison);
+      console.log('Yesterday element:', yesterdayUsageEl);
+      console.log('Prev month element:', prevMonthSameDayUsageEl);
+      
       if (data.daily_comparison) {
-        document.getElementById("todayUsage").textContent =
-          data.daily_comparison.today.count.toLocaleString();
-        document.getElementById("prevMonthUsage").textContent =
-          data.daily_comparison.previous_month.count.toLocaleString();
-        document.getElementById(
-          "dailyComparisonLabel"
-        ).textContent = `Usage: ${data.daily_comparison.today.date} vs ${data.daily_comparison.previous_month.date}`;
+        console.log('Processing daily comparison data');
+        if (yesterdayUsageEl) {
+          const yesterdayCount = data.daily_comparison.yesterday.count;
+          console.log('Setting yesterday count to:', yesterdayCount);
+          yesterdayUsageEl.textContent = yesterdayCount.toLocaleString();
+        }
+        if (prevMonthSameDayUsageEl) {
+          const prevMonthCount = data.daily_comparison.previous_month_same_day.count;
+          console.log('Setting prev month count to:', prevMonthCount);
+          prevMonthSameDayUsageEl.textContent = prevMonthCount.toLocaleString();
+        }
+        if (dailyComparisonLabelEl) {
+          const yesterdayDate = new Date(data.daily_comparison.yesterday.date + 'T00:00:00');
+          const prevMonthDate = new Date(data.daily_comparison.previous_month_same_day.date + 'T00:00:00');
+          dailyComparisonLabelEl.textContent = `Usage: ${yesterdayDate.toLocaleDateString()} vs ${prevMonthDate.toLocaleDateString()}`;
+        }
       } else {
-        document.getElementById("todayUsage").textContent = "-";
-        document.getElementById("prevMonthUsage").textContent = "-";
-        document.getElementById("dailyComparisonLabel").textContent =
-          "Today's Usage vs. Same Day Last Month";
+        console.log('No daily comparison data found');
+        if (yesterdayUsageEl) {
+          yesterdayUsageEl.textContent = "-";
+        }
+        if (prevMonthSameDayUsageEl) {
+          prevMonthSameDayUsageEl.textContent = "-";
+        }
+        if (dailyComparisonLabelEl) {
+          dailyComparisonLabelEl.textContent = "Yesterday's Usage vs. Same Day Last Month";
+        }
       }
     }
 
     updateLastUpdated() {
       const now = new Date();
-      document.getElementById("lastUpdated").textContent =
-        now.toLocaleTimeString();
+      const lastUpdatedEl = document.getElementById("lastUpdated");
+      if (lastUpdatedEl) {
+        lastUpdatedEl.textContent = now.toLocaleTimeString();
+      }
     }
 
     updateCharts(data) {
@@ -1074,11 +1244,24 @@
     updateNewSubscribersChart() {
       if (!this.dashboardData) return;
       this.showLoading();
-      const days = parseInt(
-        document.getElementById("newSubscribersTimeFilter").value
-      );
-      const filteredData = this.dashboardData.new_subscribers.slice(-days);
-      this.createNewSubscribersChart(filteredData);
+      
+      const filterValue = document.getElementById("newSubscribersTimeFilter").value;
+      
+      if (filterValue === "custom") {
+        // Show custom date range controls
+        document.getElementById("newSubscribersDateRange").style.display = "block";
+        this.hideLoading();
+        return;
+      } else {
+        // Hide custom date range controls and applied date range display
+        document.getElementById("newSubscribersDateRange").style.display = "none";
+        document.getElementById("appliedNewSubscribersDateRange").style.display = "none";
+        
+        const days = parseInt(filterValue);
+        const filteredData = this.dashboardData.new_subscribers.slice(-days);
+        this.createNewSubscribersChart(filteredData);
+      }
+      
       this.hideLoading();
     }
 
@@ -1106,8 +1289,27 @@
         churn_analysis: "true",
       });
 
-      fetch(`/dashboard-api/?${params.toString()}`)
-        .then((response) => response.json())
+      fetch(`/dashboard-api/?${params.toString()}`, {
+        credentials: 'same-origin'
+      })
+        .then((response) => {
+          if (!response.ok) {
+            if (response.status === 401) {
+              throw new Error('Authentication required. Please log in.');
+            } else if (response.status === 403) {
+              throw new Error('Insufficient permissions to access data.');
+            } else {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+          }
+          
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Server returned non-JSON response. Please check your authentication status.');
+          }
+          
+          return response.json();
+        })
         .then((data) => {
           if (data.churn_data) {
             this.updateChurnDisplay(data.churn_data);
@@ -1145,6 +1347,115 @@
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+    }
+
+    downloadNewSubscribers() {
+      const filterValue = document.getElementById("newSubscribersTimeFilter").value;
+      
+      let startDate, endDate;
+      
+      if (filterValue === "custom") {
+        // Get custom date range values
+        startDate = document.getElementById("newSubscribersStartDate").value;
+        endDate = document.getElementById("newSubscribersEndDate").value;
+        
+        if (!startDate || !endDate) {
+          alert("Please select both start and end dates before downloading.");
+          return;
+        }
+      } else {
+        // Calculate date range based on selected days
+        const days = parseInt(filterValue);
+        const today = new Date();
+        const startDateObj = new Date(today);
+        startDateObj.setDate(today.getDate() - days);
+        
+        endDate = today.toISOString().split('T')[0];
+        startDate = startDateObj.toISOString().split('T')[0];
+      }
+      
+      // Build URL with parameters
+      const params = new URLSearchParams();
+      params.append("start_date", startDate);
+      params.append("end_date", endDate);
+      
+      // Create download URL
+      const downloadUrl = `/download-new-subscribers/?${params.toString()}`;
+      
+      // Trigger download by creating a temporary link
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = "";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    applyNewSubscribersDateRange() {
+      const startDate = document.getElementById("newSubscribersStartDate").value;
+      const endDate = document.getElementById("newSubscribersEndDate").value;
+      
+      if (!startDate || !endDate) {
+        alert("Please select both start and end dates.");
+        return;
+      }
+      
+      if (new Date(startDate) > new Date(endDate)) {
+        alert("Start date cannot be later than end date.");
+        return;
+      }
+      
+      this.showLoading();
+      
+      // Fetch new subscribers data for custom date range
+      fetch(`/api/new-subscribers-trend/?start_date=${startDate}&end_date=${endDate}`, {
+        credentials: 'same-origin'
+      })
+        .then(response => {
+          if (!response.ok) {
+            if (response.status === 401) {
+              throw new Error('Authentication required. Please log in.');
+            } else if (response.status === 403) {
+              throw new Error('Insufficient permissions to access data.');
+            } else {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+          }
+          
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Server returned non-JSON response. Please check your authentication status.');
+          }
+          
+          return response.json();
+        })
+        .then(data => {
+          this.createNewSubscribersChart(data.new_subscribers);
+          
+          // Show applied date range
+          const formattedStartDate = new Date(startDate).toLocaleDateString();
+          const formattedEndDate = new Date(endDate).toLocaleDateString();
+          document.getElementById('appliedDateRangeText').textContent = `${formattedStartDate} - ${formattedEndDate}`;
+          document.getElementById('appliedNewSubscribersDateRange').style.display = 'block';
+          
+          this.hideLoading();
+        })
+        .catch(error => {
+          console.error('Error fetching new subscribers data:', error);
+          alert('Error fetching data. Please try again.');
+          this.hideLoading();
+        });
+    }
+
+    validateNewSubscribersDateRange() {
+      const startDate = document.getElementById("newSubscribersStartDate").value;
+      const endDate = document.getElementById("newSubscribersEndDate").value;
+      
+      if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+        alert("Start date cannot be later than end date.");
+        document.getElementById("newSubscribersStartDate").value = "";
+        document.getElementById("newSubscribersEndDate").value = "";
+      }
     }
 
     updateChurnDisplay(churnData) {
@@ -1214,8 +1525,17 @@
       globalSubscriberFilter.innerHTML =
         '<option value="all">All Subscribers</option>';
 
-      // Use unique_subscribers instead of top_subscribers to get all subscribers
-      const allSubscribers = data.unique_subscribers || [];
+      // Use unique_subscribers when available, fallback to top_subscribers for subscriber filtering
+      let allSubscribers = [];
+      if (data.unique_subscribers && Array.isArray(data.unique_subscribers)) {
+        allSubscribers = data.unique_subscribers;
+      } else if (data.top_subscribers && Array.isArray(data.top_subscribers)) {
+        // Fallback for when subscriber filtering is active and unique_subscribers is not provided
+        allSubscribers = data.top_subscribers.map(item => 
+          item.SubscriberName || item.subscriber || item.name
+        ).filter(Boolean);
+      }
+      
       allSubscribers.forEach((subscriber) => {
         // Add null check to prevent TypeError
         if (subscriber && typeof subscriber === "string") {
@@ -1264,24 +1584,17 @@
     }
 
     applyGlobalFilters() {
-      // Instead of client-side filtering, reload data from backend with filters
+      // This function now triggers a new API call with the selected filters.
+      // The backend will handle the filtering and caching, ensuring correct data is displayed.
       this.loadData();
     }
 
     resetGlobalFilters() {
       document.getElementById("globalSubscriberFilter").value = "all";
-      // Reset placeholder to default
+      // Update placeholder to default
       this.updateSubscriberFilterPlaceholder("all");
-      this.loadData();
-    }
-
-    resetIndividualFilters() {
-      // Reset all individual chart filters
-      document.getElementById("topProductsFilter").value = "all";
-      document.getElementById("topSubscribersFilter").value = "all";
-      document.getElementById("revenueProductFilter").value = "all";
-
-      // Reload data from backend without filters
+      
+      // Reload data from the backend with no filters applied.
       this.loadData();
     }
 
@@ -1743,6 +2056,14 @@
     applyDateChanges() {
       this.loadData();
       this.disableApplyButton();
+      
+      // Change button text to 'Apply Changes' after first load
+      if (!this.dataLoaded) {
+        setTimeout(() => {
+          const applyBtn = document.getElementById("applyBtn");
+          applyBtn.innerHTML = '<i class="fas fa-check me-1"></i> Apply Changes';
+        }, 1000);
+      }
     }
 
     enableApplyButton() {
@@ -1795,7 +2116,7 @@
       // The Date constructor handles month overflow automatically (e.g., month 11 (Dec) + 1 = month 12 -> Jan of next year)
       const endDateObj = new Date(currentYear, currentMonth + 1, 1);
 
-      // Helper function to format date as YYYY-MM-DD using local date components
+      // Helper function to format date as yyyy-MM-dd using local date components
       function formatDateToYYYYMMDD(date) {
         const year = date.getFullYear();
         const month = (date.getMonth() + 1).toString().padStart(2, "0"); // getMonth is 0-indexed, +1 for actual month number
@@ -1824,7 +2145,8 @@
 
   // Initialize dashboard when page loads
   document.addEventListener("DOMContentLoaded", () => {
-    new DashboardManager();
+    const dashboard = new DashboardManager();
+    window.dashboard = dashboard; // Make dashboard globally accessible
 
     // Initialize churn analysis date inputs with default values (current month range)
     const today = new Date();
@@ -1843,7 +2165,7 @@
       1
     );
 
-    // Helper function to format date as YYYY-MM-DD
+    // Helper function to format date as yyyy-MM-dd
     function formatDateToYYYYMMDD(date) {
       const year = date.getFullYear();
       const month = (date.getMonth() + 1).toString().padStart(2, "0");
@@ -1860,10 +2182,52 @@
   // Global variables for 3-month view
   let threeMonthChart = null;
 
+  // Refresh 3-month rolling usage data
+  function refreshThreeMonthData() {
+    dashboard.showLoading();
+
+    // Get current subscriber filter
+    const subscriberFilter = document.getElementById(
+      "globalSubscriberFilter"
+    ).value;
+
+    // Build URL with 3-month view parameter
+    let url = "/dashboard-api/?three_month_view=true";
+    if (subscriberFilter && subscriberFilter !== "all") {
+      url += `&subscriber_filter=${encodeURIComponent(subscriberFilter)}`;
+    }
+
+    console.log("Refreshing 3-month data from URL:", url);
+
+    fetch(url, {
+      credentials: 'same-origin'
+    })
+      .then((response) => {
+        console.log("Response status:", response.status);
+        return response.json();
+      })
+      .then((data) => {
+        console.log("Received refreshed data:", data);
+        if (data.three_month_usage) {
+          console.log("3-month usage data:", data.three_month_usage);
+          renderThreeMonthChart(data.three_month_usage);
+        } else {
+          console.log("No three_month_usage data in response");
+          alert("No 3-month usage data available.");
+        }
+      })
+      .catch((error) => {
+        console.error("Error refreshing 3-month data:", error);
+        alert("Error refreshing 3-month usage data. Please try again.");
+      })
+      .finally(() => {
+        dashboard.hideLoading();
+      });
+  }
+
   // Load 3-month rolling usage data
   function loadThreeMonthData() {
-    const loadingOverlay = document.getElementById("loadingOverlay");
-    loadingOverlay.style.display = "flex";
+    dashboard.showLoading();
 
     // Get current subscriber filter
     const subscriberFilter = document.getElementById(
@@ -1878,7 +2242,9 @@
 
     console.log("Loading 3-month data from URL:", url);
 
-    fetch(url)
+    fetch(url, {
+      credentials: 'same-origin'
+    })
       .then((response) => {
         console.log("Response status:", response.status);
         return response.json();
@@ -1892,8 +2258,9 @@
             "none";
           document.getElementById("threeMonthChartContainer").style.display =
             "block";
-          // Hide the load button after successful load
+          // Hide the load button and show refresh button after successful load
           document.getElementById("load3MonthBtn").style.display = "none";
+          document.getElementById("refresh3MonthBtn").style.display = "block";
           renderThreeMonthChart(data.three_month_usage);
         } else {
           console.log("No three_month_usage data in response");
@@ -1905,7 +2272,7 @@
         alert("Error loading 3-month usage data. Please try again.");
       })
       .finally(() => {
-        loadingOverlay.style.display = "none";
+        dashboard.hideLoading();
       });
   }
 

@@ -137,18 +137,13 @@
       >
         {% csrf_token %}
         <div class="mb-4">
-          <label for="subscriberDropdown" class="form-label fw-semibold"
-            >Select Subscribers</label
-          >
+          <label class="form-label fw-semibold">Select Subscribers</label>
+
           <div class="custom-dropdown" style="max-width: 400px">
-            <div
-              class="custom-dropdown-toggle"
-              id="subscriberDropdown"
-              tabindex="0"
-            >
-              <span class="selected-text">Choose subscribers...</span>
-              <i class="bi bi-chevron-down dropdown-arrow"></i>
-            </div>
+              <div class="custom-dropdown-toggle" id="subscriberDropdown" tabindex="0">
+                  <span class="selected-text">Choose subscribers...</span>
+                  <i class="bi bi-chevron-down dropdown-arrow"></i>
+              </div>
             <div class="dropdown-menu" id="subscriberMenu">
               <div class="dropdown-search">
                 <input
@@ -398,7 +393,10 @@
 
     // Form validation and spinner
     const forms = document.querySelectorAll(".needs-validation");
-    Array.prototype.slice.call(forms).forEach(function (form) {
+
+    // *** THIS IS THE CORRECTED PART ***
+    // Use the modern forEach method directly on the NodeList from querySelectorAll
+    forms.forEach(function (form) {
       form.addEventListener(
         "submit",
         function (event) {

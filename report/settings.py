@@ -83,11 +83,27 @@ WSGI_APPLICATION = 'report.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'mssql',
+#         'NAME': 'dbexcel',
+#         'HOST': 'O2JUNE\\SQLEXPRESS',
+#         'PORT': '',
+#         'OPTIONS': {
+#             'driver': 'ODBC Driver 17 for SQL Server',
+#             'Trusted_connection': 'yes',
+#             'use_legacy_datetime': True,
+#         },
+#     }
+# }
+
 DATABASES = {
     'default': {
         'ENGINE': 'mssql',
-        'NAME': 'dbexcel',
-        'HOST': 'O2JUNE\\SQLEXPRESS',
+        'NAME': 'BureauenquiryAnalytic',
+        'HOST': '192.168.1.11',
+        'USER': 'sa',
+        'PASSWORD': 'p@ssw0rd',
         'PORT': '',
         'OPTIONS': {
             'driver': 'ODBC Driver 17 for SQL Server',
@@ -96,7 +112,6 @@ DATABASES = {
         },
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -166,7 +181,7 @@ CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
         'LOCATION': 'dashboard_cache_table',
-        'TIMEOUT': 300,  # 5 minutes default timeout
+        'TIMEOUT': 3600,  # 5 minutes default timeout
         'OPTIONS': {
             'MAX_ENTRIES': 1000,
             'CULL_FREQUENCY': 3,
@@ -185,3 +200,11 @@ EMAIL_HOST_USER = 'your_email@example.com'  # Replace with your SMTP username
 EMAIL_HOST_PASSWORD = 'your_password'       # Replace with your SMTP password
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = 'Report Generator <noreply@example.com>'
+
+# Session Configuration - Increased timeout to prevent daily authentication issues
+SESSION_COOKIE_AGE = 86400 * 7  # 7 days (604800 seconds)
+SESSION_SAVE_EVERY_REQUEST = True  # Refresh session on each request
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False  # Keep sessions across browser sessions
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+SESSION_COOKIE_HTTPONLY = True  # Prevent JavaScript access to session cookies
+SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
