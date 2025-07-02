@@ -249,10 +249,13 @@
             </div>
           </div>
 
+          <button id="loadDashboardBtn" class="btn btn-success">
+            <i class="fas fa-play me-1"></i> Load Dashboard
+          </button>
           <button id="applyBtn" class="btn btn-refresh" disabled>
             <i class="fas fa-check me-1"></i> Apply Changes
           </button>
-          <button id="refreshBtn" class="btn btn-outline-secondary">
+          <button id="refreshBtn" class="btn btn-outline-secondary" style="display: none;">
             <i class="fas fa-sync-alt me-1"></i> Refresh
           </button>
         </div>
@@ -664,15 +667,21 @@
   class DashboardManager {
     constructor() {
       this.charts = {};
+      this.isDataLoaded = false;
       this.init();
     }
 
     init() {
       this.initializeDateInputs();
-      this.loadData();
       this.setupEventListeners();
-      // Auto-refresh every 24 hours (daily)
-      setInterval(() => this.loadData(), 86400000);
+      this.manageButtonStates();
+      this.showPlaceholderContent();
+      // Auto-refresh every 24 hours (daily) - only if data is loaded
+      setInterval(() => {
+        if (this.isDataLoaded) {
+          this.loadData();
+        }
+      }, 86400000);
     }
 
     setupEventListeners() {
@@ -685,6 +694,9 @@
       document
         .getElementById("endDate")
         .addEventListener("change", () => this.handleCustomDateChange());
+      document
+        .getElementById("loadDashboardBtn")
+        .addEventListener("click", () => this.loadDashboardData());
       document
         .getElementById("applyBtn")
         .addEventListener("click", () => this.applyDateChanges());
@@ -875,6 +887,8 @@
         this.updateMetrics(safeData);
         this.updateCharts(safeData);
         this.updateLastUpdated();
+        this.isDataLoaded = true;
+        this.manageButtonStates();
       } catch (error) {
         console.error("Error loading dashboard data:", error);
 
@@ -2110,6 +2124,62 @@
       document.getElementById("customDateInputs").style.display = "flex";
 
       this.updateCurrentDateRangeDisplay();
+    }
+
+    // New method to handle Load Dashboard button click
+    loadDashboardData() {
+      this.loadData();
+    }
+
+    // Manage button states based on data loading status
+    manageButtonStates() {
+      const loadBtn = document.getElementById('loadDashboardBtn');
+      const applyBtn = document.getElementById('applyBtn');
+      const refreshBtn = document.getElementById('refreshBtn');
+      
+      if (this.isDataLoaded) {
+        // Data is loaded - hide load button, show refresh button
+        loadBtn.style.display = 'none';
+        refreshBtn.style.display = 'inline-block';
+        // Apply button remains functional regardless of data state
+      } else {
+        // Data not loaded - show load button, hide refresh button
+        loadBtn.style.display = 'inline-block';
+        refreshBtn.style.display = 'none';
+        // Apply button remains functional regardless of data state
+      }
+    }
+
+    // Show placeholder content when dashboard is not loaded
+    showPlaceholderContent() {
+      // Hide loading overlay first
+      this.hideLoading();
+      
+      // Set all metrics to placeholder values
+      const metricElements = [
+        'totalSubscribers', 'totalUsage', 'totalRevenue', 'topSubscriber',
+        'retentionRate', 'highestProductByTransaction', 'highestProductByRevenue',
+        'yesterdayUsage', 'prevMonthSameDayUsage'
+      ];
+      
+      metricElements.forEach(elementId => {
+        const element = document.getElementById(elementId);
+        if (element) {
+          element.textContent = '-';
+        }
+      });
+      
+      // Set date range display
+      const currentDateRange = document.getElementById('currentDateRange');
+      if (currentDateRange) {
+        currentDateRange.textContent = 'Click "Load Dashboard" to view data';
+      }
+      
+      // Set last updated
+      const lastUpdated = document.getElementById('lastUpdated');
+      if (lastUpdated) {
+        lastUpdated.textContent = 'Not loaded';
+      }
     }
   }
 

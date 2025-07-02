@@ -7,7 +7,7 @@ from decimal import Decimal
 
 class SubscriberProductRate(models.Model):
     id = models.AutoField(primary_key=True)
-    subscriber_name = models.CharField(max_length=255, db_column='subscriber_name')
+    subscriber_name = models.CharField(max_length=255, db_column='subscriberName')
     product_name = models.CharField(max_length=255, db_column='ProductName')
     rate = models.DecimalField(max_digits=10, decimal_places=2, db_column='rate')
 

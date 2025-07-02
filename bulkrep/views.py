@@ -1,3 +1,4 @@
+from collections import defaultdict
 from django.shortcuts import render
 from django.contrib import messages
 from django.http import HttpResponse, FileResponse, JsonResponse
@@ -137,7 +138,261 @@ def clean_filename(filename):
     invalid_chars = r'[\/\\\:\*\?"<>\|]'
     return re.sub(invalid_chars, '-', filename)
 
+from django.db.models import Q, Count, Case, When
+from decimal import Decimal
+
 @login_required
+# def single_report(request):
+#     """View for generating a single report."""
+#     # --- Initial Setup (Largely Unchanged) ---
+#     today = date.today()
+#     first_day_of_month = today.replace(day=1)
+
+#     if today.month == 12:
+#         first_day_next_month = date(today.year + 1, 1, 1)
+#     else:
+#         first_day_next_month = date(today.year, today.month + 1, 1)
+
+#     report_gen = None
+#     subscribers = Usagereport.objects.values_list('SubscriberName', flat=True).distinct().order_by('SubscriberName')
+
+#     context = {
+#         'subscribers': subscribers,
+#         'start_date': first_day_of_month.strftime('%Y-%m-%d'),
+#         'end_date': first_day_next_month.strftime('%Y-%m-%d'),
+#     }
+
+#     if request.method == 'POST':
+#         subscriber_id = request.POST.get('subscriber_id')
+#         start_date_str = request.POST.get('start_date')
+#         end_date_str = request.POST.get('end_date')
+#         include_bills = request.POST.get('include_bills') == 'on'
+#         include_products = request.POST.get('include_products') == 'on'
+
+#         # --- Report Generation Tracking (Unchanged) ---
+#         if subscriber_id:
+#             report_gen = ReportGeneration.objects.create(
+#                 user=request.user, generator=request.user.username, report_type='single',
+#                 status='in_progress', subscriber_name=subscriber_id,
+#                 from_date=start_date_str, to_date=end_date_str
+#             )
+
+#         if not subscriber_id:
+#             messages.error(request, "Please select a subscriber.")
+#             return render(request, 'bulkrep/single_report.html', context)
+
+#         try:
+#             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+#             end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+#             start_date_display = start_date.strftime('%d/%m/%Y')
+#             end_date_display = end_date.strftime('%d/%m/%Y')
+#         except (ValueError, TypeError) as e:
+#             messages.error(request, f"Invalid date format: {str(e)}")
+#             return render(request, 'bulkrep/single_report.html', context)
+
+#         summary_bills = {}
+#         if include_bills:
+#             # --- OPTIMIZATION 1: Get all product counts in a single query ---
+#             queryset = Usagereport.objects.filter(
+#                 DetailsViewedDate__gte=start_date,
+#                 DetailsViewedDate__lte=end_date,
+#                 SubscriberName=subscriber_id
+#             )
+            
+#             summary_bills = queryset.aggregate(
+#                 consumer_snap_check=Count(Case(When(ProductName__icontains='Snap Check', then=1))),
+#                 consumer_basic_trace=Count(Case(When(ProductName__icontains='Basic Trace', then=1))),
+#                 consumer_basic_credit=Count(Case(When(ProductName__icontains='Basic Credit', then=1))),
+#                 consumer_detailed_credit=Count(Case(When(Q(ProductName__icontains='Detailed Credit') & ~Q(ProductName__icontains='X-SCore'), then=1))),
+#                 xscore_consumer_credit=Count(Case(When(ProductName__icontains='X-SCore Consumer Detailed Credit', then=1))),
+#                 commercial_basic_trace=Count(Case(When(ProductName__icontains='Commercial Basic Trace', then=1))),
+#                 commercial_detailed_credit=Count(Case(When(ProductName__icontains='Commercial detailed Credit', then=1))),
+#                 enquiry_report=Count(Case(When(ProductName__icontains='Enquiry Report', then=1))),
+#                 consumer_dud_cheque=Count(Case(When(ProductName__icontains='Consumer Dud Cheque', then=1))),
+#                 commercial_dud_cheque=Count(Case(When(ProductName__icontains='Commercial Dud Cheque', then=1))),
+#                 director_basic_report=Count(Case(When(ProductName__icontains='Director Basic Report', then=1))),
+#                 director_detailed_report=Count(Case(When(ProductName__icontains='Director Detailed Report', then=1))),
+#             )
+
+#         product_sections = {}
+#         product_data = []
+#         if include_products:
+#             product_data = list(Usagereport.objects.filter(
+#                 DetailsViewedDate__gte=start_date,
+#                 DetailsViewedDate__lte=end_date,
+#                 SubscriberName=subscriber_id
+#             ).order_by('ProductName', 'DetailsViewedDate').values(
+#                 'SubscriberName', 'SystemUser', 'SearchIdentity', 'SubscriberEnquiryDate',
+#                 'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
+#             ))
+            
+#             if not product_data and include_products:
+#                 messages.warning(request, f"No data found for subscriber {subscriber_id} between {start_date_display} and {end_date_display}.")
+#                 return render(request, 'bulkrep/single_report.html', context)
+
+#             for record in product_data:
+#                 product_name = record['ProductName']
+#                 if product_name not in product_sections:
+#                     product_sections[product_name] = []
+#                 product_sections[product_name].append(record)
+
+#         # --- Start Excel Generation ---
+#         try:
+#             template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
+#             buffer = io.BytesIO()
+#             wb = openpyxl.load_workbook(template_path)
+#             ws = wb.active
+
+#             # --- Write Header Info (Unchanged) ---
+#             safe_cell_assignment(ws, 5, 4, f"BILLING DETAILS - {subscriber_id}")
+#             date_range_text = f"REPORT GENERATED FOR RECORDS BETWEEN {start_date_display} and {end_date_display}"
+#             safe_cell_assignment(ws, 6, 4, date_range_text)
+
+#             if include_bills:
+#                 # --- OPTIMIZATION 2: Get all custom rates for the subscriber at once ---
+#                 custom_rates_qs = SubscriberProductRate.objects.filter(subscriber_name__iexact=subscriber_id)
+#                 custom_rates_lookup = {rate.product_name.lower(): rate.rate for rate in custom_rates_qs}
+
+#                 def get_rate(product_name_key, product_name_display):
+#                     default_rate = ENQUIRY_RATES.get(product_name_key, Decimal('0.00'))
+#                     return custom_rates_lookup.get(product_name_display.lower(), default_rate)
+
+#                 # --- REFACTORED BILLING LOGIC: Use in-memory data instead of DB queries ---
+#                 total_amount = Decimal('0.00')
+#                 products_to_bill = {
+#                     12: ('consumer_snap_check', 'Consumer Snap Check'), 13: ('consumer_basic_trace', 'Consumer Basic Trace'),
+#                     14: ('consumer_basic_credit', 'Consumer Basic Credit'), 15: ('consumer_detailed_credit', 'Consumer Detailed Credit'),
+#                     16: ('xscore_consumer_credit', 'X-Score Consumer Detailed Credit'), 17: ('commercial_basic_trace', 'Commercial Basic Trace'),
+#                     18: ('commercial_detailed_credit', 'Commercial Detailed Credit'), 20: ('enquiry_report', 'Enquiry Report'),
+#                     22: ('consumer_dud_cheque', 'Consumer Dud Cheque'), 23: ('commercial_dud_cheque', 'Commercial Dud Cheque'),
+#                     25: ('director_basic_report', 'Director Basic Report'), 26: ('director_detailed_report', 'Director Detailed Report'),
+#                 }
+
+#                 for row, (key, name) in products_to_bill.items():
+#                     quantity = summary_bills.get(key, 0)
+#                     rate = get_rate(key, name)
+#                     amount = Decimal(quantity) * rate
+                    
+#                     safe_cell_assignment(ws, row, 9, quantity)
+#                     safe_cell_assignment(ws, row, 13, f"₦{rate:,.2f}") # Using Naira symbol
+#                     safe_cell_assignment(ws, row, 16, f"₦{amount:,.2f}")
+#                     total_amount += amount
+
+#                 vat_amount = total_amount * Decimal('0.075')
+#                 amount_due = total_amount + vat_amount
+#                 safe_cell_assignment(ws, 28, 16, f"₦{total_amount:,.2f}")
+#                 safe_cell_assignment(ws, 29, 16, f"₦{vat_amount:,.2f}")
+#                 safe_cell_assignment(ws, 30, 16, f"₦{amount_due:,.2f}")
+
+#             # --- Product Details Section (Logic is unchanged) ---
+#             if include_products:
+#                 # This logic was complex and not a bottleneck for a single report, so it's preserved.
+#                 start_row_offset = 36
+#                 current_sheet = ws
+#                 sheet2 = wb["Sheet2"] if "Sheet2" in wb.sheetnames else None
+#                 sorted_product_names = sorted(product_sections.keys())
+#                 product_name_cell = None
+#                 for r in range(32, 36):
+#                     for c in range(1, 16):
+#                         cell_value = ws.cell(row=r, column=c).value
+#                         if cell_value and "product" in str(cell_value).lower():
+#                             product_name_cell = (r, c)
+#                             break
+#                     if product_name_cell: break
+#                 header_template = []
+#                 header_rows = (32, 35)
+#                 for r in range(header_rows[0], header_rows[1] + 1):
+#                     row_data = []
+#                     for c in range(1, 16):
+#                         cell = ws.cell(row=r, column=c)
+#                         cell_info = {'value': cell.value, 'position': (r, c)}
+#                         for m_range in ws.merged_cells.ranges:
+#                             if (r, c) == (m_range.min_row, m_range.min_col):
+#                                 cell_info['merged'] = (m_range.max_row - m_range.min_row + 1, m_range.max_col - m_range.min_col + 1)
+#                                 break
+#                         row_data.append(cell_info)
+#                     header_template.append(row_data)
+#                 data_start_row = 36
+#                 for product_idx, product_name in enumerate(sorted_product_names):
+#                     product_records = product_sections[product_name]
+#                     if product_idx == 0:
+#                         if product_name_cell:
+#                             safe_cell_assignment(ws, product_name_cell[0], product_name_cell[1], product_name)
+#                         current_sheet = ws
+#                         current_row_offset = data_start_row
+#                         serial_number_base = data_start_row - 1
+#                     else:
+#                         current_row_offset += 4
+#                         header_start_row = current_row_offset
+#                         for template_row_idx, template_row in enumerate(header_template):
+#                             target_row = header_start_row + template_row_idx
+#                             if current_sheet == ws and target_row > 1000000 and sheet2:
+#                                 current_sheet, header_start_row, target_row = sheet2, 13, 13 + template_row_idx
+#                             for m_range in list(current_sheet.merged_cells.ranges):
+#                                 if m_range.min_row <= target_row <= m_range.max_row:
+#                                     current_sheet.unmerge_cells(str(m_range))
+#                             for col_idx, cell_info in enumerate(template_row):
+#                                 target_col = col_idx + 1
+#                                 target_cell = current_sheet.cell(row=target_row, column=target_col)
+#                                 original_cell = ws.cell(row=cell_info['position'][0], column=cell_info['position'][1])
+#                                 target_cell._style = copy(original_cell._style)
+#                                 if template_row_idx == product_name_cell[0] - header_rows[0] and col_idx == product_name_cell[1] - 1:
+#                                     safe_cell_assignment(current_sheet, target_row, target_col, product_name)
+#                                 elif cell_info['value'] is not None:
+#                                     safe_cell_assignment(current_sheet, target_row, target_col, cell_info['value'])
+#                                 if 'merged' in cell_info:
+#                                     rows, cols = cell_info['merged']
+#                                     current_sheet.merge_cells(start_row=target_row, start_column=target_col, end_row=target_row + rows - 1, end_column=target_col + cols - 1)
+#                         current_row_offset = header_start_row + (header_rows[1] - header_rows[0] + 1)
+#                         serial_number_base = current_row_offset - 1
+#                     for record_idx, record in enumerate(product_records):
+#                         current_row = current_row_offset + record_idx
+#                         if current_row > 1000000 and sheet2 and current_sheet != sheet2:
+#                             current_sheet, current_row_offset, serial_number_base = sheet2, 13, 12
+#                             current_row = current_row_offset + record_idx
+#                         copy_row_format(current_sheet, 36, current_row, 17)
+#                         safe_cell_assignment(current_sheet, current_row, 2, current_row - serial_number_base)
+#                         safe_cell_assignment(current_sheet, current_row, 5, record['SubscriberName'])
+#                         safe_cell_assignment(current_sheet, current_row, 7, record.get('SystemUser', ''))
+#                         safe_cell_assignment(current_sheet, current_row, 10, record['SubscriberEnquiryDate'].strftime('%Y-%m-%d') if record['SubscriberEnquiryDate'] else '')
+#                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
+#                         safe_cell_assignment(current_sheet, current_row, 12, record['DetailsViewedDate'].strftime('%Y-%m-%d') if record['DetailsViewedDate'] else '')
+#                         safe_cell_assignment(current_sheet, current_row, 15, record.get('SearchOutput', ''))
+#                         merge_and_center_data_row(current_sheet, current_row)
+#                     current_row_offset += len(product_records)
+
+#             # --- Save and Serve File (Unchanged) ---
+#             for sheet in wb.worksheets: auto_size_columns(sheet)
+#             add_generated_by(ws, request.user.username)
+#             wb.save(buffer)
+#             buffer.seek(0)
+#             month_year = start_date.strftime('%B%Y')
+#             clean_subscriber = clean_filename(subscriber_id)
+#             filename = f"{clean_subscriber}_{month_year}_{uuid.uuid4().hex[:8]}.xlsx"
+#             single_reports_dir = os.path.join(settings.MEDIA_ROOT, 'reports', 'single')
+#             os.makedirs(single_reports_dir, exist_ok=True)
+#             file_path = os.path.join(single_reports_dir, filename)
+#             with open(file_path, 'wb') as f: f.write(buffer.getvalue())
+#             download_url = settings.MEDIA_URL + f'reports/single/{filename}'
+#             if report_gen:
+#                 report_gen.status = 'success'
+#                 report_gen.completed_at = timezone.now()
+#                 report_gen.save()
+#             return render(request, 'bulkrep/download_ready.html', {'download_url': download_url})
+
+#         except Exception as e:
+#             error_msg = f"Error generating report: {str(e)}"
+#             messages.error(request, error_msg)
+#             if report_gen:
+#                 report_gen.status = 'failed'
+#                 report_gen.error_message = error_msg[:500]
+#                 report_gen.completed_at = timezone.now()
+#                 report_gen.save()
+#             return render(request, 'bulkrep/single_report.html', context)
+
+#     return render(request, 'bulkrep/single_report.html', context)
+
+# @login_required
 def single_report(request):
     """View for generating a single report."""
     # Get the current date range (first day of current month to first day of next month)
@@ -934,10 +1189,21 @@ def single_report(request):
                         # Format SubscriberEnquiryDate
                         subscriber_enquiry_date = record['SubscriberEnquiryDate']
                         if subscriber_enquiry_date:
+
                             if isinstance(subscriber_enquiry_date, str):
-                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date)
+                                date_str = subscriber_enquiry_date
                             else:
-                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date.strftime('%Y-%m-%d'))
+                                # Convert to date object first to remove any time component
+                                if hasattr(subscriber_enquiry_date, 'date'):
+                                    date_only = subscriber_enquiry_date.date()
+                                else:
+                                    date_only = subscriber_enquiry_date
+                                date_str = date_only.strftime('%Y-%m-%d')
+                            # Set cell format to text BEFORE assignment to prevent Excel from adding time component
+                            current_sheet.cell(row=current_row, column=10).number_format = '@'
+                            safe_cell_assignment(current_sheet, current_row, 10, date_str)
+                            # Ensure the format stays as text after assignment
+                            current_sheet.cell(row=current_row, column=10).number_format = '@'
                         else:
                             safe_cell_assignment(current_sheet, current_row, 10, "")
                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
@@ -945,9 +1211,19 @@ def single_report(request):
                         details_viewed_date = record['DetailsViewedDate']
                         if details_viewed_date:
                             if isinstance(details_viewed_date, str):
-                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date)
+                                date_str = details_viewed_date
                             else:
-                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date.strftime('%Y-%m-%d'))
+                                # Convert to date object first to remove any time component
+                                if hasattr(details_viewed_date, 'date'):
+                                    date_only = details_viewed_date.date()
+                                else:
+                                    date_only = details_viewed_date
+                                date_str = date_only.strftime('%Y-%m-%d')
+                            # Set cell format to text BEFORE assignment to prevent Excel from adding time component
+                            current_sheet.cell(row=current_row, column=12).number_format = '@'
+                            safe_cell_assignment(current_sheet, current_row, 12, date_str)
+                            # Ensure the format stays as text after assignment
+                            current_sheet.cell(row=current_row, column=12).number_format = '@'
                         else:
                             safe_cell_assignment(current_sheet, current_row, 12, "")
                         safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
@@ -1597,6 +1873,48 @@ def bulk_report(request):
             messages.warning(request, f"No subscribers found for the selected criteria between {start_date_display} and {end_date_display}.")
             return render(request, 'bulkrep/bulk_report.html', context)
 
+        # OPTIMIZATION: Fetch all usage data and product rates upfront to eliminate N+1 queries
+        print(f"Fetching all usage data for {len(subscribers_list)} subscribers...")
+        
+        # Fetch all usage data in one query
+        all_usage_data = list(Usagereport.objects.filter(
+            DetailsViewedDate__gte=start_date,
+            DetailsViewedDate__lte=end_date,
+            SubscriberName__in=subscribers_list
+        ).values(
+            'SubscriberName', 'ProductName', 'SystemUser', 'SearchIdentity', 
+            'SubscriberEnquiryDate', 'SearchOutput', 'DetailsViewedDate', 
+            'ProductInputed'
+        ))
+        
+        # Group usage data by subscriber for instant lookup
+        usage_by_subscriber = {}
+        for record in all_usage_data:
+            subscriber = record['SubscriberName']
+            if subscriber not in usage_by_subscriber:
+                usage_by_subscriber[subscriber] = []
+            usage_by_subscriber[subscriber].append(record)
+        
+        # Fetch all custom product rates in one query
+        print(f"Fetching all custom product rates...")
+        all_custom_rates = list(SubscriberProductRate.objects.filter(
+            subscriber_name__in=subscribers_list
+        ).values('subscriber_name', 'product_name', 'rate'))
+        
+        # Create lookup dictionary for custom rates: {(subscriber, product): rate}
+        custom_rates_lookup = {}
+        for rate_record in all_custom_rates:
+            key = (rate_record['subscriber_name'].lower(), rate_record['product_name'].lower())
+            custom_rates_lookup[key] = Decimal(str(rate_record['rate']))
+        
+        print(f"Loaded {len(all_usage_data)} usage records and {len(all_custom_rates)} custom rates")
+        
+        # Helper function to get custom rate with fallback to default
+        def get_custom_rate(subscriber_name, product_name, default_rate):
+            """Get custom rate for subscriber/product with fallback to default rate."""
+            key = (subscriber_name.lower(), product_name.lower())
+            return custom_rates_lookup.get(key, Decimal(str(default_rate)))
+        
         # Generate reports for all selected subscribers using a zip file
         try:
             template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
@@ -1610,15 +1928,10 @@ def bulk_report(request):
                         # Log which subscriber we're processing
                         print(f"Processing subscriber: {subscriber_name}")
                         
-                        # Fetch data using Django ORM
+                        # OPTIMIZED: Use pre-fetched data instead of database queries
+                        subscriber_usage_data = usage_by_subscriber.get(subscriber_name, [])
+                        
                         if include_bills:
-                            # Query for summary bills using Django ORM
-                            queryset = Usagereport.objects.filter(
-                                DetailsViewedDate__gte=start_date,
-                                DetailsViewedDate__lte=end_date,
-                                SubscriberName=subscriber_name
-                            )
-                            
                             # Initialize summary dictionary with all possible keys
                             summary_bills = {
                                 'consumer_snap_check': 0,
@@ -1635,32 +1948,40 @@ def bulk_report(request):
                                 'director_detailed_report': 0
                             }
                             
-                            # Count each product type using Django ORM's Q objects for case-insensitive contains
-                            summary_bills['consumer_snap_check'] = queryset.filter(ProductName__icontains='Snap Check').count()
-                            summary_bills['consumer_basic_trace'] = queryset.filter(ProductName__icontains='Basic Trace').count()
-                            summary_bills['consumer_basic_credit'] = queryset.filter(ProductName__icontains='Basic Credit').count()
-                            summary_bills['consumer_detailed_credit'] = queryset.filter(ProductName__icontains='Detailed Credit').exclude(ProductName__icontains='X-SCore').count()
-                            summary_bills['xscore_consumer_credit'] = queryset.filter(ProductName__icontains='X-SCore Consumer Detailed Credit').count()
-                            summary_bills['commercial_basic_trace'] = queryset.filter(ProductName__icontains='Commercial Basic Trace').count()
-                            summary_bills['commercial_detailed_credit'] = queryset.filter(ProductName__icontains='Commercial detailed Credit').count()
-                            summary_bills['enquiry_report'] = queryset.filter(ProductName__icontains='Enquiry Report').count()
-                            summary_bills['consumer_dud_cheque'] = queryset.filter(ProductName__icontains='Consumer Dud Cheque').count()
-                            summary_bills['commercial_dud_cheque'] = queryset.filter(ProductName__icontains='Commercial Dud Cheque').count()
-                            summary_bills['director_basic_report'] = queryset.filter(ProductName__icontains='Director Basic Report').count()
-                            summary_bills['director_detailed_report'] = queryset.filter(ProductName__icontains='Director Detailed Report').count()
+                            # Count each product type using Python filtering (much faster than DB queries)
+                            for record in subscriber_usage_data:
+                                product_name = record['ProductName']
+                                if 'Snap Check' in product_name:
+                                    summary_bills['consumer_snap_check'] += 1
+                                elif 'Basic Trace' in product_name:
+                                    summary_bills['consumer_basic_trace'] += 1
+                                elif 'Basic Credit' in product_name:
+                                    summary_bills['consumer_basic_credit'] += 1
+                                elif 'Detailed Credit' in product_name and 'X-SCore' not in product_name:
+                                    summary_bills['consumer_detailed_credit'] += 1
+                                elif 'X-SCore Consumer Detailed Credit' in product_name:
+                                    summary_bills['xscore_consumer_credit'] += 1
+                                elif 'Commercial Basic Trace' in product_name:
+                                    summary_bills['commercial_basic_trace'] += 1
+                                elif 'Commercial detailed Credit' in product_name:
+                                    summary_bills['commercial_detailed_credit'] += 1
+                                elif 'Enquiry Report' in product_name:
+                                    summary_bills['enquiry_report'] += 1
+                                elif 'Consumer Dud Cheque' in product_name:
+                                    summary_bills['consumer_dud_cheque'] += 1
+                                elif 'Commercial Dud Cheque' in product_name:
+                                    summary_bills['commercial_dud_cheque'] += 1
+                                elif 'Director Basic Report' in product_name:
+                                    summary_bills['director_basic_report'] += 1
+                                elif 'Director Detailed Report' in product_name:
+                                    summary_bills['director_detailed_report'] += 1
                         else:
                             summary_bills = {}
 
-                        # Query for product details using Django ORM
+                        # OPTIMIZED: Use pre-fetched data for product details
                         if include_products:
-                            product_data = Usagereport.objects.filter(
-                                DetailsViewedDate__gte=start_date,
-                                DetailsViewedDate__lte=end_date,
-                                SubscriberName=subscriber_name
-                            ).order_by('ProductName', 'DetailsViewedDate').values(
-                                'SubscriberName', 'SystemUser', 'SearchIdentity', 'SubscriberEnquiryDate',
-                                'SearchOutput', 'DetailsViewedDate', 'ProductInputed', 'ProductName'
-                            )
+                            # Sort the data by ProductName and DetailsViewedDate
+                            product_data = sorted(subscriber_usage_data, key=lambda x: (x['ProductName'], x['DetailsViewedDate']))
                             
                             # Group by ProductName
                             product_sections = {}
@@ -1669,8 +1990,6 @@ def bulk_report(request):
                                 if product_name not in product_sections:
                                     product_sections[product_name] = []
                                 product_sections[product_name].append(record)
-                            
-                            product_data = list(product_data)  # Convert to list for compatibility
                         else:
                             product_sections = {}
                             product_data = []
@@ -1770,201 +2089,54 @@ def bulk_report(request):
                                 safe_cell_assignment(ws, 25, 9, summary_bills.get('director_basic_report', 0) or 0)  # I25
                                 safe_cell_assignment(ws, 26, 9, summary_bills.get('director_detailed_report', 0) or 0)  # I26
                                 
-                                # Set rates in column M (13) - merged from M to O with Naira formatting
-                                # Check for custom subscriber rates with fallback to ENQUIRY_RATES
+                                # OPTIMIZED: Set rates in column M (13) using pre-fetched lookup
                                 
                                 # Consumer Snap Check (row 12)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Snap Check'
-                                    ).first()
-                                    
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                        print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Snap Check: {custom_rate}")
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
-                                        print(f"DEBUG: Using default rate for Consumer Snap Check: {custom_rate}")
-                                except Exception as e:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
-                                    print(f"ERROR: {e}. Using default rate for Consumer Snap Check: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Snap Check', ENQUIRY_RATES['consumer_snap_check'])
                                 safe_cell_assignment(ws, 12, 13, f"₦{custom_rate:,.2f}")  # M12
                                 
                                 # Consumer Basic Trace (row 13)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Basic Trace'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Basic Trace: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    print(f"DEBUG: Using default rate for Consumer Basic Trace: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Basic Trace', ENQUIRY_RATES['consumer_basic_trace'])
                                 safe_cell_assignment(ws, 13, 13, f"₦{custom_rate:,.2f}")  # M13
                                 
                                 # Consumer Basic Credit (row 14)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Basic Credit'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Basic Credit: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    print(f"DEBUG: Using default rate for Consumer Basic Credit: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Basic Credit', ENQUIRY_RATES['consumer_basic_credit'])
                                 safe_cell_assignment(ws, 14, 13, f"₦{custom_rate:,.2f}")  # M14
                                 
                                 # Consumer Detailed Credit (row 15)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Detailed Credit'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Detailed Credit: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    print(f"DEBUG: Using default rate for Consumer Detailed Credit: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Detailed Credit', ENQUIRY_RATES['consumer_detailed_credit'])
                                 safe_cell_assignment(ws, 15, 13, f"₦{custom_rate:,.2f}")  # M15
                                 
                                 # X-Score Consumer Credit (row 16)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='X-Score Consumer Detailed Credit'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - X-Score Consumer Detailed Credit: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    print(f"DEBUG: Using default rate for X-Score Consumer Detailed Credit: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'X-Score Consumer Detailed Credit', ENQUIRY_RATES['xscore_consumer_credit'])
                                 safe_cell_assignment(ws, 16, 13, f"₦{custom_rate:,.2f}")  # M16
                                 
                                 # Commercial Basic Trace (row 17)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Basic Trace'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Basic Trace: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    print(f"DEBUG: Using default rate for Commercial Basic Trace: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Commercial Basic Trace', ENQUIRY_RATES['commercial_basic_trace'])
                                 safe_cell_assignment(ws, 17, 13, f"₦{custom_rate:,.2f}")  # M17
                                 
                                 # Commercial Detailed Credit (row 18)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Detailed Credit'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Detailed Credit: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    print(f"DEBUG: Using default rate for Commercial Detailed Credit: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Commercial Detailed Credit', ENQUIRY_RATES['commercial_detailed_credit'])
                                 safe_cell_assignment(ws, 18, 13, f"₦{custom_rate:,.2f}")  # M18
                                 
                                 # Enquiry Report (row 20)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Enquiry Report'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Enquiry Report: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    print(f"DEBUG: Using default rate for Enquiry Report: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Enquiry Report', ENQUIRY_RATES['enquiry_report'])
                                 safe_cell_assignment(ws, 20, 13, f"₦{custom_rate:,.2f}")  # M20
                                 
                                 # Consumer Dud Cheque (row 22)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Dud Cheque'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Consumer Dud Cheque: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    print(f"DEBUG: Using default rate for Consumer Dud Cheque: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Dud Cheque', ENQUIRY_RATES['consumer_dud_cheque'])
                                 safe_cell_assignment(ws, 22, 13, f"₦{custom_rate:,.2f}")  # M22
                                 
                                 # Commercial Dud Cheque (row 23)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Dud Cheque'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Commercial Dud Cheque: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    print(f"DEBUG: Using default rate for Commercial Dud Cheque: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Commercial Dud Cheque', ENQUIRY_RATES['commercial_dud_cheque'])
                                 safe_cell_assignment(ws, 23, 13, f"₦{custom_rate:,.2f}")  # M23
                                 
                                 # Director Basic Report (row 25)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Director Basic Report'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Director Basic Report: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    print(f"DEBUG: Using default rate for Director Basic Report: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Director Basic Report', ENQUIRY_RATES['director_basic_report'])
                                 safe_cell_assignment(ws, 25, 13, f"₦{custom_rate:,.2f}")  # M25
                                 
                                 # Director Detailed Report (row 26)
-                                try:
-                                    custom_rate_obj = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Director Detailed Report'
-                                    ).first()
-                                    if custom_rate_obj and hasattr(custom_rate_obj, 'rate'):
-                                        custom_rate = Decimal(str(custom_rate_obj.rate))
-                                    else:
-                                        custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    print(f"DEBUG: Using custom rate for {subscriber_name} - Director Detailed Report: {custom_rate}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rate = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    print(f"DEBUG: Using default rate for Director Detailed Report: {custom_rate}")
+                                custom_rate = get_custom_rate(subscriber_name, 'Director Detailed Report', ENQUIRY_RATES['director_detailed_report'])
                                 safe_cell_assignment(ws, 26, 13, f"₦{custom_rate:,.2f}")  # M26
                                             # Calculate and set amounts in column P (16) - merged from P to Q
                                 total_amount = 0
@@ -1973,231 +2145,85 @@ def bulk_report(request):
                                 custom_rates = {}
                                 
                                 # Calculate amounts (quantity × rate) and populate column P with Naira formatting
-                                # Use the custom rates we already looked up, not the default ENQUIRY_RATES
+                                # Use the optimized custom rate lookup
                                 
                                 # Consumer Snap Check
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Snap Check'      
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['consumer_snap_check'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Snap Check: {custom_rates['consumer_snap_check']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['consumer_snap_check'] = Decimal(str(ENQUIRY_RATES['consumer_snap_check']))
-                                    logger.debug(f"Using default rate for Consumer Snap Check: {custom_rates['consumer_snap_check']}")
-                                
-                                consumer_snap_amount = Decimal(str(summary_bills.get('consumer_snap_check', 0) or 0)) * custom_rates['consumer_snap_check']
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Snap Check', ENQUIRY_RATES['consumer_snap_check'])
+                                consumer_snap_amount = Decimal(str(summary_bills.get('consumer_snap_check', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 12, 16, f"₦{consumer_snap_amount:,.2f}")  # P12
                                 total_amount += consumer_snap_amount
                                 
                                 # Consumer Basic Trace
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Basic Trace'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['consumer_basic_trace'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['consumer_basic_trace'] = Decimal(str(ENQUIRY_RATES['consumer_basic_trace']))
-                                    logger.debug(f"Using default rate for Consumer Basic Trace: {custom_rates['consumer_basic_trace']}")
-                                
-                                consumer_basic_trace_amount = Decimal(str(summary_bills.get('consumer_basic_trace', 0) or 0)) * custom_rates['consumer_basic_trace']
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Basic Trace', ENQUIRY_RATES['consumer_basic_trace'])
+                                consumer_basic_trace_amount = Decimal(str(summary_bills.get('consumer_basic_trace', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 13, 16, f"₦{consumer_basic_trace_amount:,.2f}")  # P13
                                 total_amount += consumer_basic_trace_amount
                                 
                                 # Consumer Basic Credit
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Basic Credit'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['consumer_basic_credit'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['consumer_basic_credit'] = Decimal(str(ENQUIRY_RATES['consumer_basic_credit']))
-                                    logger.debug(f"Using default rate for Consumer Basic Credit: {custom_rates['consumer_basic_credit']}")
-                                
-                                consumer_basic_credit_amount = Decimal(str(summary_bills.get('consumer_basic_credit', 0) or 0)) * custom_rates['consumer_basic_credit']
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Basic Credit', ENQUIRY_RATES['consumer_basic_credit'])
+                                consumer_basic_credit_amount = Decimal(str(summary_bills.get('consumer_basic_credit', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 14, 16, f"₦{consumer_basic_credit_amount:,.2f}")  # P14
                                 total_amount += consumer_basic_credit_amount
                                 
                                 # Consumer Detailed Credit
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Detailed Credit'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['consumer_detailed_credit'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['consumer_detailed_credit'] = Decimal(str(ENQUIRY_RATES['consumer_detailed_credit']))
-                                    logger.debug(f"Using default rate for Consumer Detailed Credit: {custom_rates['consumer_detailed_credit']}")
-                                
-                                consumer_detailed_credit_amount = Decimal(str(summary_bills.get('consumer_detailed_credit', 0) or 0)) * custom_rates['consumer_detailed_credit']
+                                custom_rate = get_custom_rate(subscriber_name, 'Consumer Detailed Credit', ENQUIRY_RATES['consumer_detailed_credit'])
+                                consumer_detailed_credit_amount = Decimal(str(summary_bills.get('consumer_detailed_credit', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 15, 16, f"₦{consumer_detailed_credit_amount:,.2f}")  # P15
                                 total_amount += consumer_detailed_credit_amount
                                 
                                 # X-Score Consumer Credit
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='X-Score Consumer Detailed Credit'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['xscore_consumer_credit'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['xscore_consumer_credit'] = Decimal(str(ENQUIRY_RATES['xscore_consumer_credit']))
-                                    logger.debug(f"Using default rate for X-Score Consumer Detailed Credit: {custom_rates['xscore_consumer_credit']}")
-                                
-                                xscore_consumer_amount = Decimal(str(summary_bills.get('xscore_consumer_credit', 0) or 0)) * custom_rates['xscore_consumer_credit']
+                                custom_rate = get_custom_rate(subscriber_name, 'X-Score Consumer Detailed Credit', ENQUIRY_RATES['xscore_consumer_credit'])
+                                xscore_consumer_amount = Decimal(str(summary_bills.get('xscore_consumer_credit', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 16, 16, f"₦{xscore_consumer_amount:,.2f}")  # P16
                                 total_amount += xscore_consumer_amount
                                 
                                 # Commercial Basic Trace
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Basic Trace'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['commercial_basic_trace'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['commercial_basic_trace'] = Decimal(str(ENQUIRY_RATES['commercial_basic_trace']))
-                                    logger.debug(f"Using default rate for Commercial Basic Trace: {custom_rates['commercial_basic_trace']}")
-                                
-                                commercial_basic_trace_amount = Decimal(str(summary_bills.get('commercial_basic_trace', 0) or 0)) * custom_rates['commercial_basic_trace']
+                                custom_rate = get_custom_rate(subscriber_name, 'Commercial Basic Trace', ENQUIRY_RATES['commercial_basic_trace'])
+                                commercial_basic_trace_amount = Decimal(str(summary_bills.get('commercial_basic_trace', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 17, 16, f"₦{commercial_basic_trace_amount:,.2f}")  # P17
                                 total_amount += commercial_basic_trace_amount
                                 
                                 # Commercial Detailed Credit
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Detailed Credit'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['commercial_detailed_credit'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['commercial_detailed_credit'] = Decimal(str(ENQUIRY_RATES['commercial_detailed_credit']))
-                                    logger.debug(f"Using default rate for Commercial Detailed Credit: {custom_rates['commercial_detailed_credit']}")
-                                
-                                commercial_detailed_credit_amount = Decimal(str(summary_bills.get('commercial_detailed_credit', 0) or 0)) * custom_rates['commercial_detailed_credit']
+                                custom_rate = get_custom_rate(subscriber_name, 'Commercial Detailed Credit', ENQUIRY_RATES['commercial_detailed_credit'])
+                                commercial_detailed_credit_amount = Decimal(str(summary_bills.get('commercial_detailed_credit', 0) or 0)) * custom_rate
                                 safe_cell_assignment(ws, 18, 16, f"₦{commercial_detailed_credit_amount:,.2f}")  # P18
                                 total_amount += commercial_detailed_credit_amount
                                 
                                 # Enquiry Report
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Enquiry Report'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['enquiry_report'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Enquiry Report: {custom_rates['enquiry_report']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['enquiry_report'] = Decimal(str(ENQUIRY_RATES['enquiry_report']))
-                                    logger.debug(f"Using default rate for Enquiry Report: {custom_rates['enquiry_report']}")
+                                custom_rates['enquiry_report'] = get_custom_rate(subscriber_name, 'Enquiry Report', ENQUIRY_RATES['enquiry_report'])
+                                logger.debug(f"Using rate for {subscriber_name} - Enquiry Report: {custom_rates['enquiry_report']}")
                                 
                                 enquiry_report_amount = Decimal(str(summary_bills.get('enquiry_report', 0) or 0)) * custom_rates['enquiry_report']
                                 safe_cell_assignment(ws, 20, 16, f"₦{enquiry_report_amount:,.2f}")  # P20
                                 total_amount += enquiry_report_amount
                                 
                                 # Consumer Dud Cheque
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Consumer Dud Cheque'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['consumer_dud_cheque'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['consumer_dud_cheque'] = Decimal(str(ENQUIRY_RATES['consumer_dud_cheque']))
-                                    logger.debug(f"Using default rate for Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
+                                custom_rates['consumer_dud_cheque'] = get_custom_rate(subscriber_name, 'Consumer Dud Cheque', ENQUIRY_RATES['consumer_dud_cheque'])
+                                logger.debug(f"Using rate for {subscriber_name} - Consumer Dud Cheque: {custom_rates['consumer_dud_cheque']}")
                                 
                                 consumer_dud_amount = Decimal(str(summary_bills.get('consumer_dud_cheque', 0) or 0)) * custom_rates['consumer_dud_cheque']
                                 safe_cell_assignment(ws, 22, 16, f"₦{consumer_dud_amount:,.2f}")  # P22
                                 total_amount += consumer_dud_amount
                                 
                                 # Commercial Dud Cheque
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Commercial Dud Cheque'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['commercial_dud_cheque'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['commercial_dud_cheque'] = Decimal(str(ENQUIRY_RATES['commercial_dud_cheque']))
-                                    logger.debug(f"Using default rate for Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
+                                custom_rates['commercial_dud_cheque'] = get_custom_rate(subscriber_name, 'Commercial Dud Cheque', ENQUIRY_RATES['commercial_dud_cheque'])
+                                logger.debug(f"Using rate for {subscriber_name} - Commercial Dud Cheque: {custom_rates['commercial_dud_cheque']}")
                                 
                                 commercial_dud_amount = Decimal(str(summary_bills.get('commercial_dud_cheque', 0) or 0)) * custom_rates['commercial_dud_cheque']
                                 safe_cell_assignment(ws, 23, 16, f"₦{commercial_dud_amount:,.2f}")  # P23
                                 total_amount += commercial_dud_amount
                                 
                                 # Director Basic Report
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Director Basic Report'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['director_basic_report'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Director Basic Report: {custom_rates['director_basic_report']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['director_basic_report'] = Decimal(str(ENQUIRY_RATES['director_basic_report']))
-                                    logger.debug(f"Using default rate for Director Basic Report: {custom_rates['director_basic_report']}")
+                                custom_rates['director_basic_report'] = get_custom_rate(subscriber_name, 'Director Basic Report', ENQUIRY_RATES['director_basic_report'])
+                                logger.debug(f"Using rate for {subscriber_name} - Director Basic Report: {custom_rates['director_basic_report']}")
                                 
                                 director_basic_amount = Decimal(str(summary_bills.get('director_basic_report', 0) or 0)) * custom_rates['director_basic_report']
                                 safe_cell_assignment(ws, 25, 16, f"₦{director_basic_amount:,.2f}")  # P25
                                 total_amount += director_basic_amount
                                 
                                 # Director Detailed Report
-                                try:
-                                    rate = SubscriberProductRate.objects.filter(
-                                        subscriber_name__iexact=subscriber_name, 
-                                        product_name__iexact='Director Detailed Report'
-                                    ).first()
-                                    if rate and hasattr(rate, 'rate'):
-                                        custom_rates['director_detailed_report'] = Decimal(str(rate.rate))
-                                    else:
-                                        custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    logger.debug(f"Using custom rate for {subscriber_name} - Director Detailed Report: {custom_rates['director_detailed_report']}")
-                                except SubscriberProductRate.DoesNotExist:
-                                    custom_rates['director_detailed_report'] = Decimal(str(ENQUIRY_RATES['director_detailed_report']))
-                                    logger.debug(f"Using default rate for Director Detailed Report: {custom_rates['director_detailed_report']}")
+                                custom_rates['director_detailed_report'] = get_custom_rate(subscriber_name, 'Director Detailed Report', ENQUIRY_RATES['director_detailed_report'])
+                                logger.debug(f"Using rate for {subscriber_name} - Director Detailed Report: {custom_rates['director_detailed_report']}")
                                 
                                 director_detailed_amount = Decimal(str(summary_bills.get('director_detailed_report', 0) or 0)) * custom_rates['director_detailed_report']
                                 safe_cell_assignment(ws, 26, 16, f"₦{director_detailed_amount:,.2f}")  # P26
@@ -2365,9 +2391,19 @@ def bulk_report(request):
                                         subscriber_enquiry_date = record['SubscriberEnquiryDate']
                                         if subscriber_enquiry_date:
                                             if isinstance(subscriber_enquiry_date, str):
-                                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date)
+                                                date_str = subscriber_enquiry_date
                                             else:
-                                                safe_cell_assignment(current_sheet, current_row, 10, subscriber_enquiry_date.strftime('%Y-%m-%d'))
+                                                # Convert to date object first to remove any time component
+                                                if hasattr(subscriber_enquiry_date, 'date'):
+                                                    date_only = subscriber_enquiry_date.date()
+                                                else:
+                                                    date_only = subscriber_enquiry_date
+                                                date_str = date_only.strftime('%Y-%m-%d')
+                                            # Set cell format to text BEFORE assignment to prevent Excel from adding time component
+                                            current_sheet.cell(row=current_row, column=10).number_format = '@'
+                                            safe_cell_assignment(current_sheet, current_row, 10, date_str)
+                                            # Ensure the format stays as text after assignment
+                                            current_sheet.cell(row=current_row, column=10).number_format = '@'
                                         else:
                                             safe_cell_assignment(current_sheet, current_row, 10, "")
                                         safe_cell_assignment(current_sheet, current_row, 11, record['ProductName'])
@@ -2375,9 +2411,19 @@ def bulk_report(request):
                                         details_viewed_date = record['DetailsViewedDate']
                                         if details_viewed_date:
                                             if isinstance(details_viewed_date, str):
-                                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date)
+                                                date_str = details_viewed_date
                                             else:
-                                                safe_cell_assignment(current_sheet, current_row, 12, details_viewed_date.strftime('%Y-%m-%d'))
+                                                # Convert to date object first to remove any time component
+                                                if hasattr(details_viewed_date, 'date'):
+                                                    date_only = details_viewed_date.date()
+                                                else:
+                                                    date_only = details_viewed_date
+                                                date_str = date_only.strftime('%Y-%m-%d')
+                                            # Set cell format to text BEFORE assignment to prevent Excel from adding time component
+                                            current_sheet.cell(row=current_row, column=12).number_format = '@'
+                                            safe_cell_assignment(current_sheet, current_row, 12, date_str)
+                                            # Ensure the format stays as text after assignment
+                                            current_sheet.cell(row=current_row, column=12).number_format = '@'
                                         else:
                                             safe_cell_assignment(current_sheet, current_row, 12, "")
                                         safe_cell_assignment(current_sheet, current_row, 15, record['SearchOutput'] if record['SearchOutput'] else "")
@@ -2920,11 +2966,90 @@ def get_top_products_by_frequency_filtered(start_date, end_date, product_filter=
         return []
 
 
+# def get_churn_data_filtered(start_date, end_date, churn_days=None):
+#     """Get churn data with optional day filtering - OPTIMIZED"""
+#     try:
+
+        
+#         # Use custom days if provided, otherwise use default logic
+#         if churn_days and churn_days.isdigit():
+#             days = int(churn_days)
+#             analysis_start = end_date - timedelta(days=days)
+#             previous_start = analysis_start - timedelta(days=days)
+#             previous_end = analysis_start
+#         else:
+#             # Use original logic
+#             analysis_start = start_date
+#             previous_start = start_date - timedelta(days=(end_date - start_date).days)
+#             previous_end = start_date
+        
+#         # Get previous subscribers count
+#         previous_subscribers_count = Usagereport.objects.filter(
+#             DetailsViewedDate__range=[previous_start, previous_end]
+#         ).values('SubscriberName').distinct().count()
+        
+#         # Get current subscribers count
+#         current_subscribers_count = Usagereport.objects.filter(
+#             DetailsViewedDate__range=[analysis_start, end_date]
+#         ).values('SubscriberName').distinct().count()
+        
+#         # Get churned subscribers count using database subquery
+#         churned_count = Usagereport.objects.filter(
+#             DetailsViewedDate__range=[previous_start, previous_end]
+#         ).values('SubscriberName').distinct().exclude(
+#             SubscriberName__in=Usagereport.objects.filter(
+#                 DetailsViewedDate__range=[analysis_start, end_date]
+#             ).values('SubscriberName').distinct()
+#         ).count()
+        
+#         churn_rate = churned_count / previous_subscribers_count * 100 if previous_subscribers_count else 0
+        
+#         # Generate trend data for chart (daily churn rates over the period)
+#         trend_data = []
+#         current_date = analysis_start
+#         while current_date <= end_date:
+#             # Get subscribers for this day and previous period
+#             day_end = current_date
+#             day_start = current_date - timedelta(days=1)
+            
+#             # Get previous day subscribers
+#             prev_day_subscribers = Usagereport.objects.filter(
+#                 DetailsViewedDate__range=[day_start, day_start]
+#             ).values('SubscriberName').distinct().count()
+            
+#             # Get current day subscribers
+#             curr_day_subscribers = Usagereport.objects.filter(
+#                 DetailsViewedDate__range=[day_end, day_end]
+#             ).values('SubscriberName').distinct().count()
+            
+#             # Calculate daily churn rate (simplified)
+#             if prev_day_subscribers > 0:
+#                 daily_churned = max(0, prev_day_subscribers - curr_day_subscribers)
+#                 daily_churn_rate = (daily_churned / prev_day_subscribers) * 100
+#             else:
+#                 daily_churn_rate = 0
+            
+#             trend_data.append({
+#                 'date': current_date.strftime('%Y-%m-%d'),
+#                 'churn_rate': round(daily_churn_rate, 2)
+#             })
+            
+#             current_date += timedelta(days=1)
+        
+#         return {
+#             'churned_count': churned_count,
+#             'churn_rate': round(churn_rate, 2),
+#             'previous_subscribers': previous_subscribers_count,
+#             'current_subscribers': current_subscribers_count,
+#             'trend_data': trend_data
+#         }
+#     except Exception as e:
+#         logger.error(f"Error getting filtered churn data: {str(e)}")
+#         return {'churned_count': 0, 'churn_rate': 0, 'previous_subscribers': 0, 'current_subscribers': 0}
+
 def get_churn_data_filtered(start_date, end_date, churn_days=None):
     """Get churn data with optional day filtering - OPTIMIZED"""
     try:
-
-        
         # Use custom days if provided, otherwise use default logic
         if churn_days and churn_days.isdigit():
             days = int(churn_days)
@@ -2936,17 +3061,17 @@ def get_churn_data_filtered(start_date, end_date, churn_days=None):
             analysis_start = start_date
             previous_start = start_date - timedelta(days=(end_date - start_date).days)
             previous_end = start_date
-        
+
         # Get previous subscribers count
         previous_subscribers_count = Usagereport.objects.filter(
             DetailsViewedDate__range=[previous_start, previous_end]
         ).values('SubscriberName').distinct().count()
-        
+
         # Get current subscribers count
         current_subscribers_count = Usagereport.objects.filter(
             DetailsViewedDate__range=[analysis_start, end_date]
         ).values('SubscriberName').distinct().count()
-        
+
         # Get churned subscribers count using database subquery
         churned_count = Usagereport.objects.filter(
             DetailsViewedDate__range=[previous_start, previous_end]
@@ -2955,26 +3080,31 @@ def get_churn_data_filtered(start_date, end_date, churn_days=None):
                 DetailsViewedDate__range=[analysis_start, end_date]
             ).values('SubscriberName').distinct()
         ).count()
-        
+
         churn_rate = churned_count / previous_subscribers_count * 100 if previous_subscribers_count else 0
-        
-        # Generate trend data for chart (daily churn rates over the period)
+
+        # --- OPTIMIZED TREND CALCULATION ---
+
+        # 1. Fetch all daily unique subscriber counts for the entire period in a single query.
+        trend_period_start = analysis_start - timedelta(days=1)
+        daily_counts_qs = Usagereport.objects.filter(
+            DetailsViewedDate__range=[trend_period_start, end_date]
+        ).values('DetailsViewedDate').annotate(
+            sub_count=Count('SubscriberName', distinct=True)
+        ).order_by('DetailsViewedDate')
+
+        # 2. Store the results in a dictionary for fast, in-memory lookups.
+        daily_counts_lookup = {item['DetailsViewedDate']: item['sub_count'] for item in daily_counts_qs}
+
+        # 3. Process the in-memory data to build the trend without any more database calls.
         trend_data = []
         current_date = analysis_start
         while current_date <= end_date:
-            # Get subscribers for this day and previous period
-            day_end = current_date
-            day_start = current_date - timedelta(days=1)
-            
-            # Get previous day subscribers
-            prev_day_subscribers = Usagereport.objects.filter(
-                DetailsViewedDate__range=[day_start, day_start]
-            ).values('SubscriberName').distinct().count()
-            
-            # Get current day subscribers
-            curr_day_subscribers = Usagereport.objects.filter(
-                DetailsViewedDate__range=[day_end, day_end]
-            ).values('SubscriberName').distinct().count()
+            prev_day = current_date - timedelta(days=1)
+
+            # Get counts from the lookup dictionary instead of the database
+            prev_day_subscribers = daily_counts_lookup.get(prev_day, 0)
+            curr_day_subscribers = daily_counts_lookup.get(current_date, 0)
             
             # Calculate daily churn rate (simplified)
             if prev_day_subscribers > 0:
@@ -3237,84 +3367,95 @@ def get_subscriber_product_rate(subscriber, product_key):
     except Exception as e:
         logger.error(f"Error getting subscriber product rate: {str(e)}")
         return ENQUIRY_RATES.get(product_key, Decimal('0.00'))
-
-
-def get_revenue_data_filtered(start_date, end_date, revenue_product_filter=None):
-    """Get revenue data with optional product filtering - OPTIMIZED"""
+##################################KEEPING TOUCH WITH THE REFCTORED OF THE REVENUE FILTERED#################################
+def get_all_subscriber_product_rate():
+    """
+    Gets all product subscriber rates in a single query and groups them in memory.
+    """
     try:
-        from django.db.models import Q, Count
+        # Use iterator for memory efficiency on large datasets
+        all_rates_data = SubscriberProductRate.objects.values_list(
+            'subscriber_name', 'product_name', 'rate'
+        ).iterator(chunk_size=2000)
+
+        # Group rates by subscriber for fast lookups
+        grouped_rates = defaultdict(dict)
+        for subscriber_name, product_name, rate in all_rates_data:
+            # Store as {subscriber: {product: rate}}
+            grouped_rates[subscriber_name][product_name.lower()] = rate
+            
+        return grouped_rates
         
-        print(f"get_revenue_data_filtered called with dates: {start_date} to {end_date}, filter: {revenue_product_filter}")
-        revenue_data = []
+    except Exception as e:
+        logger.error(f"Error getting all subscriber product rates: {str(e)}")
+        return {} # Return an empty dictionary on error
+def get_revenue_data_filtered(start_date, end_date, revenue_product_filter=None):
+    """
+    Get revenue data with optional product filtering - OPTIMIZED version.
+    """
+    try:
+        # 1. Fetch all custom rates into memory once.
+        subscriber_rates = get_all_subscriber_product_rate()
         
-        for product_key, default_rate in ENQUIRY_RATES.items():
-            # Skip if filter is applied and doesn't match
-            if revenue_product_filter and revenue_product_filter != 'all':
-                if revenue_product_filter.lower() not in product_key.lower():
-                    continue
+        revenue_by_product = defaultdict(lambda: {'revenue': Decimal('0.00'), 'count': 0})
+
+        # 2. Get all usage data, aggregated by the database.
+        usage_query = Usagereport.objects.filter(
+            DetailsViewedDate__range=[start_date, end_date]
+        )
+
+        # Apply product filter if provided
+        if revenue_product_filter and revenue_product_filter != 'all':
+            usage_query = usage_query.filter(ProductName__icontains=revenue_product_filter)
+
+        aggregated_usage = usage_query.values('SubscriberName', 'ProductName').annotate(
+            usage_count=Count('SearchIdentity')  # CORRECTED: Changed from 'id' to the primary key 'SearchIdentity'
+        ).order_by('SubscriberName')
+
+        # 3. Process the aggregated data in memory.
+        for usage in aggregated_usage:
+            subscriber = usage['SubscriberName']
+            product_name_db = usage['ProductName']
+            count = usage['usage_count']
+
+            # Match the database product name to a key in ENQUIRY_RATES
+            matched_key = None
+            for key in ENQUIRY_RATES.keys():
+                if key.replace('_', ' ').lower() in product_name_db.lower():
+                    matched_key = key
+                    break
             
-            # Map product keys to actual product names in database
-            product_variations = [
-                product_key.replace('_', ' '),
-                product_key.replace('_', '-'),
-                product_key.title().replace('_', ' '),
-            ]
-            # print(f"Product variations for {product_key}: {product_variations}")
+            if not matched_key:
+                continue
+
+            # Check for a custom rate in memory, otherwise use the default.
+            rate = subscriber_rates.get(subscriber, {}).get(
+                product_name_db.lower(), 
+                Decimal(str(ENQUIRY_RATES[matched_key]))
+            )
             
-            # Single query with OR conditions for all variations
-            q_objects = Q()
-            for variation in product_variations:
-                q_objects |= Q(ProductName__icontains=variation)
-            # print(f"Q objects for {product_key}: {q_objects}")
+            revenue = Decimal(str(rate)) * Decimal(str(count))
             
-            # Get usage entries
-            usage_entries = Usagereport.objects.filter(
-                DetailsViewedDate__range=[start_date, end_date]
-            ).filter(q_objects)
-            # print(f"SQL query for {product_key}: {usage_entries.query}")
-            
-            usage_count = usage_entries.count()
-            # print(f"Product: {product_key}, Usage Count: {usage_count}")
-            
-            if usage_count > 0:
-                # Calculate revenue using subscriber-specific rates where available
-                total_revenue = Decimal('0.00')
-                
-                # Group by subscriber to apply correct rates
-                subscriber_usage = {}
-                for entry in usage_entries:
-                    subscriber = entry.SubscriberName
-                    subscriber_usage[subscriber] = subscriber_usage.get(subscriber, 0) + 1
-                
-                # Calculate revenue with proper rates
-                for subscriber, count in subscriber_usage.items():
-                    # Get subscriber-specific rate or fall back to default
-                    rate = get_subscriber_product_rate(subscriber, product_key)
-                    # Ensure rate is Decimal and count is int
-                    if isinstance(rate, str):
-                        try:
-                            rate = Decimal(rate)
-                        except (ValueError, TypeError):
-                            rate = default_rate
-                    elif not isinstance(rate, Decimal):
-                        rate = default_rate
-                    
-                    # Calculate individual revenue and add to total
-                    individual_revenue = rate * Decimal(str(count))
-                    total_revenue += individual_revenue
-                
-                revenue_data.append({
-                    'product': product_key.replace('_', ' ').title(),
-                    'revenue': float(total_revenue),
-                    'count': usage_count,
-                    'rate': float(default_rate)  # Show default rate in UI
-                })
+            # Aggregate totals for the final report
+            product_title = matched_key.replace('_', ' ').title()
+            revenue_by_product[product_title]['revenue'] += revenue
+            revenue_by_product[product_title]['count'] += count
+
+        # 4. Format the final output.
+        revenue_data = [
+            {
+                'product': product,
+                'revenue': float(data['revenue']),
+                'count': data['count']
+            }
+            for product, data in revenue_by_product.items()
+        ]
         
         return sorted(revenue_data, key=lambda x: x['revenue'], reverse=True)
-    except Exception as e:
-        # print(f"Error getting filtered revenue data: {str(e)}")
-        return []
 
+    except Exception as e:
+        logger.error(f"Error getting filtered revenue data: {str(e)}")
+        return []#########################################end###############################################################
 
 def get_revenue_data_subscriber_filtered(start_date, end_date, subscriber_name):
     """Calculate revenue for specific subscriber"""
@@ -3875,39 +4016,3 @@ def get_daily_comparison(subscriber_filter=None):
             'count': prev_count,
         }
     }
-# --- NEW: Helper for daily comparison ---
-# def get_daily_comparison(subscriber_filter=None):
-#     """
-#     Returns usage counts for today and the same day last month.
-#     """
-#     today = timezone.now().date()
-#     # Get the same day last month
-#     if today.month == 1:
-#         prev_month = 12
-#         prev_year = today.year - 1
-#     else:
-#         prev_month = today.month - 1
-#         prev_year = today.year
-#     # Handle day overflow (e.g., Feb 30th)
-#     try:
-#         prev_month_day = today.replace(year=prev_year, month=prev_month)
-#     except ValueError:
-#         # Use last day of previous month
-#         last_day = calendar.monthrange(prev_year, prev_month)[1]
-#         prev_month_day = today.replace(year=prev_year, month=prev_month, day=last_day)
-
-#     query_today = Usagereport.objects.filter(DetailsViewedDate__date=today)
-#     query_prev = Usagereport.objects.filter(DetailsViewedDate__date=prev_month_day)
-#     if subscriber_filter and subscriber_filter != 'all':
-#         query_today = query_today.filter(SubscriberName=subscriber_filter)
-#         query_prev = query_prev.filter(SubscriberName=subscriber_filter)
-#     return {
-#         'today': {
-#             'date': today.strftime('%Y-%m-%d'),
-#             'count': query_today.count(),
-#         },
-#         'previous_month': {
-#             'date': prev_month_day.strftime('%Y-%m-%d'),
-#             'count': query_prev.count(),
-#         }
-#     }
