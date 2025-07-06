@@ -1,0 +1,17 @@
+{% extends 'bulkrep/base.html' %}
+
+{% block title %}Logged Out{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-center align-items-center" style="min-height: 80vh; background: #f7f9fb;">
+    <div class="card shadow-sm border-0" style="max-width: 400px; width: 100%; border-radius: 18px;">
+        <div class="card-header text-white" style="background: #6b7280; border-radius: 18px 18px 0 0;">
+            <h4 class="mb-0">Logged Out</h4>
+        </div>
+        <div class="card-body p-4 text-center">
+            <p>You have been successfully logged out.</p>
+            <a href="{% url 'accounts:login' %}" class="btn btn-primary mt-3">Log in again</a>
+        </div>
+    </div>
+</div>
+{% endblock %} 
