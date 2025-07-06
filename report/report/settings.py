@@ -85,12 +85,28 @@ WSGI_APPLICATION = 'report.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+DATABASES = {
+    'default': {
+        'ENGINE': 'mssql',
+        'NAME': 'dbexcel',
+        'HOST': 'O2JUNE\\SQLEXPRESS',
+        'PORT': '',
+        'OPTIONS': {
+            'driver': 'ODBC Driver 17 for SQL Server',
+            'Trusted_connection': 'yes',
+            'use_legacy_datetime': True,
+        },
+    }
+}
+
 # DATABASES = {
 #     'default': {
-#         'ENGINE': 'mssql',
-#         'NAME': 'dbexcel',
-#         'HOST': 'O2JUNE\\SQLEXPRESS',
-#         'PORT': '',
+#         'ENGINE': config('DB_ENGINE'),
+#         'NAME': config('DB_NAME'),
+#         'HOST': config('DB_HOST'),
+#         'USER': config('DB_USER'),
+#         'PASSWORD': config('DB_PASSWORD'),
+#         'PORT': config('DB_PORT', default=''),
 #         'OPTIONS': {
 #             'driver': 'ODBC Driver 17 for SQL Server',
 #             'Trusted_connection': 'yes',
@@ -99,21 +115,7 @@ WSGI_APPLICATION = 'report.wsgi.application'
 #     }
 # }
 
-DATABASES = {
-    'default': {
-        'ENGINE': config('DB_ENGINE'),
-        'NAME': config('DB_NAME'),
-        'HOST': config('DB_HOST'),
-        'USER': config('DB_USER'),
-        'PASSWORD': config('DB_PASSWORD'),
-        'PORT': config('DB_PORT', default=''),
-        'OPTIONS': {
-            'driver': 'ODBC Driver 17 for SQL Server',
-            'Trusted_connection': 'yes',
-            'use_legacy_datetime': True,
-        },
-    }
-}
+
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
