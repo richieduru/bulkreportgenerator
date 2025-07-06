@@ -13,4 +13,5 @@ urlpatterns = [
     path('download-churned-subscribers/', views.download_churned_subscribers, name='download_churned_subscribers'),
     path('download-new-subscribers/', views.download_new_subscribers, name='download_new_subscribers'),
     path('api/new-subscribers-trend/', views.new_subscribers_trend_api, name='new_subscribers_trend_api'),
+    path('api/usage-trends/', views.usage_trends_api, name='usage_trends_api'),
 ]

@@ -390,8 +390,41 @@
               <option value="7">Last 7 days</option>
               <option value="30" selected>Last 30 days</option>
               <option value="90">Last 90 days</option>
-              <option value="365">Last year</option>
+              <option value="custom">Custom Range</option>
             </select>
+          </div>
+        </div>
+        
+        <div id="usageTrendsDateRange" class="mt-2" style="display: none;">
+          <div class="d-flex gap-2 align-items-center flex-wrap">
+            <label class="form-label mb-0 me-1" style="font-size: 0.875rem"
+              >Date range:</label
+            >
+            <input
+              type="date"
+              id="usageTrendsStartDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <span class="text-muted">to</span>
+            <input
+              type="date"
+              id="usageTrendsEndDate"
+              class="form-control form-control-sm"
+              style="width: 130px"
+            />
+            <button
+              id="applyUsageTrendsDateRange"
+              class="btn btn-primary btn-sm"
+            >
+              Apply
+            </button>
+          </div>
+          <div id="appliedUsageTrendsDateRange" class="mt-2" style="display: none;">
+            <small class="text-muted">
+              <i class="fas fa-calendar-alt me-1"></i>
+              Showing data for: <span id="appliedUsageTrendsDateRangeText"></span>
+            </small>
           </div>
         </div>
         <canvas id="usageTrendsChart"></canvas>
@@ -744,6 +777,15 @@
       document
         .getElementById("newSubscribersEndDate")
         .addEventListener("change", () => this.validateNewSubscribersDateRange());
+      document
+        .getElementById("applyUsageTrendsDateRange")
+        .addEventListener("click", () => this.applyUsageTrendsDateRange());
+      document
+        .getElementById("usageTrendsStartDate")
+        .addEventListener("change", () => this.validateUsageTrendsDateRange());
+      document
+        .getElementById("usageTrendsEndDate")
+        .addEventListener("change", () => this.validateUsageTrendsDateRange());
 
       // Global filter listeners
       document
@@ -1172,11 +1214,24 @@
     updateUsageTrendsChart() {
       if (!this.dashboardData) return;
       this.showLoading();
-      const days = parseInt(
-        document.getElementById("usageTrendsTimeFilter").value
-      );
-      const filteredData = this.dashboardData.usage_trends.slice(-days);
-      this.createUsageTrendsChart(filteredData);
+      
+      const filterValue = document.getElementById("usageTrendsTimeFilter").value;
+      
+      if (filterValue === "custom") {
+        // Show custom date range controls
+        document.getElementById("usageTrendsDateRange").style.display = "block";
+        this.hideLoading();
+        return;
+      } else {
+        // Hide custom date range controls and applied date range display
+        document.getElementById("usageTrendsDateRange").style.display = "none";
+        document.getElementById("appliedUsageTrendsDateRange").style.display = "none";
+        
+        const days = parseInt(filterValue);
+        const filteredData = this.dashboardData.usage_trends.slice(-days);
+        this.createUsageTrendsChart(filteredData);
+      }
+      
       this.hideLoading();
     }
 
@@ -1447,6 +1502,73 @@
         alert("Start date cannot be later than end date.");
         document.getElementById("newSubscribersStartDate").value = "";
         document.getElementById("newSubscribersEndDate").value = "";
+      }
+    }
+
+    applyUsageTrendsDateRange() {
+      const startDate = document.getElementById("usageTrendsStartDate").value;
+      const endDate = document.getElementById("usageTrendsEndDate").value;
+      
+      if (!startDate || !endDate) {
+        alert("Please select both start and end dates.");
+        return;
+      }
+      
+      if (new Date(startDate) > new Date(endDate)) {
+        alert("Start date cannot be later than end date.");
+        return;
+      }
+      
+      this.showLoading();
+      
+      // Fetch usage trends data for custom date range
+      fetch(`/api/usage-trends/?start_date=${startDate}&end_date=${endDate}`, {
+        credentials: 'same-origin'
+      })
+        .then(response => {
+          if (!response.ok) {
+            if (response.status === 401) {
+              throw new Error('Authentication required. Please log in.');
+            } else if (response.status === 403) {
+              throw new Error('Insufficient permissions to access data.');
+            } else {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+          }
+          
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            throw new Error('Server returned non-JSON response. Please check your authentication status.');
+          }
+          
+          return response.json();
+        })
+        .then(data => {
+          this.createUsageTrendsChart(data.usage_trends);
+          
+          // Show applied date range
+          const formattedStartDate = new Date(startDate).toLocaleDateString();
+          const formattedEndDate = new Date(endDate).toLocaleDateString();
+          document.getElementById('appliedUsageTrendsDateRangeText').textContent = `${formattedStartDate} - ${formattedEndDate}`;
+          document.getElementById('appliedUsageTrendsDateRange').style.display = 'block';
+          
+          this.hideLoading();
+        })
+        .catch(error => {
+          console.error('Error fetching usage trends data:', error);
+          alert('Error fetching data. Please try again.');
+          this.hideLoading();
+        });
+    }
+
+    validateUsageTrendsDateRange() {
+      const startDate = document.getElementById("usageTrendsStartDate").value;
+      const endDate = document.getElementById("usageTrendsEndDate").value;
+      
+      if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+        alert("Start date cannot be later than end date.");
+        document.getElementById("usageTrendsStartDate").value = "";
+        document.getElementById("usageTrendsEndDate").value = "";
       }
     }
 

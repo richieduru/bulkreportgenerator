@@ -2610,6 +2610,45 @@ def new_subscribers_trend_api(request):
         return JsonResponse({'error': 'Internal server error'}, status=500)
 
 
+def usage_trends_api(request):
+    """API endpoint for usage trends data with custom date range"""
+    try:
+        # Get date range from request
+        start_date_str = request.GET.get('start_date', None)
+        end_date_str = request.GET.get('end_date', None)
+        
+        if not start_date_str or not end_date_str:
+            return JsonResponse({'error': 'Both start_date and end_date are required'}, status=400)
+        
+        # Parse dates
+        start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        
+        # Validate date range
+        if start_date > end_date:
+            return JsonResponse({'error': 'Start date cannot be later than end date'}, status=400)
+        
+        # Get subscriber filter if provided
+        subscriber_filter = request.GET.get('subscriber_filter', 'all')
+        if subscriber_filter == 'all':
+            subscriber_filter = None
+        
+        # Get usage trends data
+        usage_trends_data = get_usage_trends_filtered(start_date, end_date, None, subscriber_filter)
+        
+        return JsonResponse({
+            'usage_trends': usage_trends_data,
+            'start_date': start_date_str,
+            'end_date': end_date_str
+        })
+        
+    except ValueError as e:
+        return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=400)
+    except Exception as e:
+        logger.error(f"Error in usage trends API: {str(e)}")
+        return JsonResponse({'error': 'Internal server error'}, status=500)
+
+
 def get_usage_trends_filtered(start_date, end_date, usage_trends_days=None, subscriber_filter=None):
     """Get usage trends with optional day filtering and subscriber filtering"""
     try:
