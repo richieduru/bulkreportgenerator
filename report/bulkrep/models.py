@@ -7,7 +7,7 @@ from decimal import Decimal
 
 class SubscriberProductRate(models.Model):
     id = models.AutoField(primary_key=True)
-    subscriber_name = models.CharField(max_length=255, db_column='subscriber_name')
+    subscriber_name = models.CharField(max_length=255, db_column='SubscriberName')
     product_name = models.CharField(max_length=255, db_column='ProductName')
     rate = models.DecimalField(max_digits=10, decimal_places=2, db_column='rate')
 
@@ -187,7 +187,7 @@ ENQUIRY_RATES = {
     'consumer_basic_trace': Decimal('170.00'),
     'consumer_basic_credit': Decimal('170.00'),
     'consumer_detailed_credit': Decimal('240.00'),
-    'xscore_consumer_credit': Decimal('500.00'),
+    'xscore_consumer_detailed_credit': Decimal('500.00'),
     'commercial_basic_trace': Decimal('275.00'),
     'commercial_detailed_credit': Decimal('500.00'),
     'enquiry_report': Decimal('50.00'),

@@ -381,7 +381,7 @@
       <div class="chart-container">
         <div class="d-flex justify-content-between align-items-center">
           <h5><i class="fas fa-chart-line me-2"></i>Usage Trends Over Time</h5>
-          <div class="d-flex gap-2">
+          <div class="d-flex gap-2 align-items-center">
             <select
               id="usageTrendsTimeFilter"
               class="form-select form-select-sm"
@@ -392,6 +392,14 @@
               <option value="90">Last 90 days</option>
               <option value="custom">Custom Range</option>
             </select>
+            <button
+              id="downloadUsageTrendsBtn"
+              class="btn btn-outline-secondary btn-sm"
+              title="Download CSV"
+              style="border: none; background: none; color: #6c757d"
+            >
+              <i class="fas fa-download"></i>
+            </button>
           </div>
         </div>
         
@@ -491,6 +499,10 @@
             <i class="fas fa-user-friends me-2"></i>Top Subscribers by Usage
           </h5>
           <div class="d-flex gap-2">
+            
+            <button id="downloadTopSubscribersBtn" class="btn btn-outline-secondary btn-sm" title="Download as CSV">
+              <i class="fas fa-download"></i>
+            </button>
             <select
               id="topSubscribersFilter"
               class="form-select form-select-sm"
@@ -633,7 +645,7 @@
           </div>
         </div>
 
-        <div class="">
+        <!-- <div class="">
           <div class="card">
             <div class="card-header py-2">
               <h6 class="mb-0">Churn Trend</h6>
@@ -645,7 +657,7 @@
         </div>
       </div>
     </div>
-  </div>
+  </div> -->
 
   <!-- <div class="row mb-4">
     <div class="col-lg-6">
@@ -701,6 +713,7 @@
     constructor() {
       this.charts = {};
       this.isDataLoaded = false;
+      this.appliedSubscriberFilter = "all"; // Initialize with default value
       this.init();
     }
 
@@ -769,6 +782,9 @@
         .getElementById("downloadNewSubscribersBtn")
         .addEventListener("click", () => this.downloadNewSubscribers());
       document
+        .getElementById("downloadUsageTrendsBtn")
+        .addEventListener("click", () => this.downloadUsageTrends());
+      document
         .getElementById("applyNewSubscribersDateRange")
         .addEventListener("click", () => this.applyNewSubscribersDateRange());
       document
@@ -817,7 +833,12 @@
       document
         .getElementById("resetFiltersBtn")
         .addEventListener("click", () => this.resetGlobalFilters());
+
+        document
+          .getElementById("downloadTopSubscribersBtn")
+          .addEventListener("click", () => this.downloadTopSubscribers());
     }
+
 
     showLoading() {
       const loadingOverlay = document.getElementById("loadingOverlay");
@@ -830,6 +851,8 @@
       loadingOverlay.style.display = ""; // Clear any inline styles
       loadingOverlay.classList.add("hidden");
     }
+
+// In dashboard.html, replace the entire loadData function.
 
     async loadData() {
       const startDate = document.getElementById("startDate").value;
@@ -899,9 +922,8 @@
           top_products: Array.isArray(data.top_products)
             ? data.top_products
             : [],
-          // revenue_data: Array.isArray(data.revenue_data)
-          //   ? data.revenue_data
-          //   : [],
+          all_products_by_frequency: Array.isArray(data.all_products_by_frequency) ? data.all_products_by_frequency : [],
+          all_subscribers_by_usage: Array.isArray(data.all_subscribers_by_usage) ? data.all_subscribers_by_usage : [],
           usage_trends: Array.isArray(data.usage_trends)
             ? data.usage_trends
             : [],
@@ -916,7 +938,6 @@
           retention_rate: data.retention_rate || { retention_rate: 0 },
           highest_product_by_transaction:
             data.highest_product_by_transaction || "N/A",
-          // highest_product_by_revenue: data.highest_product_by_revenue || "N/A",
           unique_products: Array.isArray(data.unique_products)
             ? data.unique_products
             : [],
@@ -924,6 +945,10 @@
             ? data.unique_subscribers
             : [],
           daily_comparison: data.daily_comparison || null,
+          // --- FIX: Ensure key_subscribers_list is safely handled ---
+          key_subscribers_list: Array.isArray(data.key_subscribers_list)
+            ? data.key_subscribers_list
+            : [],
         };
 
         this.updateMetrics(safeData);
@@ -931,6 +956,7 @@
         this.updateLastUpdated();
         this.isDataLoaded = true;
         this.manageButtonStates();
+        this.updateSubscriberFilterPlaceholder(subscriberFilter);
       } catch (error) {
         console.error("Error loading dashboard data:", error);
 
@@ -941,8 +967,8 @@
 
         // Update UI to show error state instead of breaking
         const elements = [
-          "totalSubscribers", "totalUsage", /* "totalRevenue", */ "topSubscriber",
-          "highestProductByTransaction", /* "highestProductByRevenue" */
+          "totalSubscribers", "totalUsage", "topSubscriber",
+          "highestProductByTransaction",
         ];
         
         elements.forEach(elementId => {
@@ -957,6 +983,7 @@
         this.hideLoading();
       }
     }
+// In dashboard.html, replace the entire updateMetrics function.
 
     updateMetrics(data) {
       // Add null checks to prevent TypeError
@@ -969,22 +996,6 @@
       if (totalUsageEl) {
         totalUsageEl.textContent = data.total_usage_entries.toLocaleString();
       }
-
-      // Calculate base revenue
-      // const baseRevenue =
-      //   data.revenue_data && data.revenue_data.length > 0
-      //     ? data.revenue_data.reduce((sum, item) => sum + item.revenue, 0)
-      //     : 0;
-
-      // Add 7.50% VAT to get total revenue
-      // const vatRate = 0.075; // 7.50%
-      // const vatAmount = baseRevenue * vatRate;
-      // const totalRevenue = baseRevenue + vatAmount;
-
-      // const totalRevenueEl = document.getElementById("totalRevenue");
-      // if (totalRevenueEl) {
-      //   totalRevenueEl.textContent = `₦${totalRevenue.toLocaleString()}`;
-      // }
 
       // Update top subscriber
       const topSubscriber =
@@ -1015,16 +1026,6 @@
             : highestProductByTransaction;
       }
 
-      // Update highest product by revenue
-      // const highestProductByRevenue = data.highest_product_by_revenue || "N/A";
-      // const highestProductByRevenueEl = document.getElementById("highestProductByRevenue");
-      // if (highestProductByRevenueEl) {
-      //   highestProductByRevenueEl.textContent =
-      //     highestProductByRevenue.length > 15
-      //       ? highestProductByRevenue.substring(0, 15) + "..."
-      //       : highestProductByRevenue;
-      // }
-
       // Update churn metrics
       const churnRateEl = document.getElementById("churnRate");
       if (churnRateEl) {
@@ -1041,30 +1042,23 @@
         activeCountEl.textContent = data.churn_data.current_subscribers.toLocaleString();
       }
 
-      // Populate filter dropdowns
-      this.populateFilterDropdowns(data);
+      // --- FIX: Call both dropdown population functions correctly ---
       this.populateGlobalFilters(data);
+      this.populateFilterDropdowns(data);
 
-     // --- NEW: Daily Comparison Metric ---
-// --- CORRECTED AND COMPLETE Daily Comparison Metric Logic ---
+
+     // --- Daily Comparison Metric Logic ---
       const yesterdayUsageEl = document.getElementById("yesterdayUsage");
       const prevMonthSameDayUsageEl = document.getElementById("prevMonthSameDayUsage");
       const dailyComparisonLabelEl = document.getElementById("dailyComparisonLabel");
       
-      console.log('Daily comparison data:', data.daily_comparison);
-      console.log('Yesterday element:', yesterdayUsageEl);
-      console.log('Prev month element:', prevMonthSameDayUsageEl);
-      
       if (data.daily_comparison) {
-        console.log('Processing daily comparison data');
         if (yesterdayUsageEl) {
           const yesterdayCount = data.daily_comparison.yesterday.count;
-          console.log('Setting yesterday count to:', yesterdayCount);
           yesterdayUsageEl.textContent = yesterdayCount.toLocaleString();
         }
         if (prevMonthSameDayUsageEl) {
           const prevMonthCount = data.daily_comparison.previous_month_same_day.count;
-          console.log('Setting prev month count to:', prevMonthCount);
           prevMonthSameDayUsageEl.textContent = prevMonthCount.toLocaleString();
         }
         if (dailyComparisonLabelEl) {
@@ -1073,7 +1067,6 @@
           dailyComparisonLabelEl.textContent = `Usage: ${yesterdayDate.toLocaleDateString()} vs ${prevMonthDate.toLocaleDateString()}`;
         }
       } else {
-        console.log('No daily comparison data found');
         if (yesterdayUsageEl) {
           yesterdayUsageEl.textContent = "-";
         }
@@ -1105,111 +1098,61 @@
       // 3-month chart will be loaded on demand when button is clicked
     }
 
+    // In dashboard.html, replace the entire function with this one.
+
+// In dashboard.html, replace the entire function with this one
+// In dashboard.html, replace the entire populateFilterDropdowns function.
+
     populateFilterDropdowns(data) {
-      // Populate product filters
-      const productFilter = document.getElementById("topProductsFilter");
-      // const revenueProductFilter = document.getElementById(
-      //   "revenueProductFilter"
-      // );
+        console.log("--- Starting Dropdown Population ---");
 
-      // Clear existing options except 'All'
-      productFilter.innerHTML = '<option value="all">All Products</option>';
-      // revenueProductFilter.innerHTML =
-      //   '<option value="all">All Products</option>';
+        // --- Product Filter Logic ---
+        const productFilter = document.getElementById("topProductsFilter");
+        productFilter.innerHTML = '<option value="all">All Products</option>';
+        let products = data.unique_products || [];
 
-      // Add product options with error checking
-      let products = [];
-      if (
-        data.top_products &&
-        Array.isArray(data.top_products) &&
-        data.top_products.length > 0
-      ) {
-        try {
-          products = [
-            ...new Set(
-              data.top_products.map((item) => {
-                // Handle different possible field names
-                return (
-                  item.ProductName ||
-                  item.product ||
-                  item.name ||
-                  "Unknown Product"
+        products.forEach((product) => {
+            if (product) {
+                const option = new Option(
+                    product.length > 20 ? product.substring(0, 20) + "..." : product,
+                    product
                 );
-              })
-            ),
-          ];
-        } catch (error) {
-          console.error(
-            "Error processing top_products data:",
-            error,
-            data.top_products
-          );
-          products = [];
+                productFilter.appendChild(option);
+            }
+        });
+
+        // --- Subscriber Filter Logic ---
+        const subscriberFilter = document.getElementById("topSubscribersFilter");
+        subscriberFilter.innerHTML = '<option value="all">All Subscribers</option>';
+
+        let subscribersToDisplay;
+        
+        // --- FIX: This is the core logic that selects the correct list of names ---
+        if (this.appliedSubscriberFilter === 'key_subscribers') {
+            console.log("LOGIC: 'key_subscribers' selected. Using key_subscribers_list.");
+            subscribersToDisplay = data.key_subscribers_list || [];
+        } else {
+            console.log("LOGIC: Using the default unique_subscribers list.");
+            subscribersToDisplay = data.unique_subscribers || [];
         }
-      }
+        
+        console.log("Final list for dropdown:", subscribersToDisplay);
 
-      products.forEach((product) => {
-        if (product && product !== "Unknown Product") {
-          const option1 = new Option(
-            product.length > 20 ? product.substring(0, 20) + "..." : product,
-            product
-          );
-          const option2 = new Option(
-            product.length > 20 ? product.substring(0, 20) + "..." : product,
-            product
-          );
-          productFilter.appendChild(option1);
-          // revenueProductFilter.appendChild(option2);
-        }
-      });
-
-      // Populate subscriber filter
-      const subscriberFilter = document.getElementById("topSubscribersFilter");
-      subscriberFilter.innerHTML =
-        '<option value="all">All Subscribers</option>';
-
-      let subscribers = [];
-      if (
-        data.top_subscribers &&
-        Array.isArray(data.top_subscribers) &&
-        data.top_subscribers.length > 0
-      ) {
-        try {
-          subscribers = [
-            ...new Set(
-              data.top_subscribers.map((item) => {
-                // Handle different possible field names
-                return (
-                  item.SubscriberName ||
-                  item.subscriber ||
-                  item.name ||
-                  "Unknown Subscriber"
+        // Now, populate the dropdown using the chosen list, sorted alphabetically
+        subscribersToDisplay.sort().forEach((subscriber) => {
+            if (subscriber) {
+                const option = new Option(
+                    subscriber.length > 25 ?
+                    subscriber.substring(0, 25) + "..." :
+                    subscriber,
+                    subscriber
                 );
-              })
-            ),
-          ];
-        } catch (error) {
-          console.error(
-            "Error processing top_subscribers data:",
-            error,
-            data.top_subscribers
-          );
-          subscribers = [];
-        }
-      }
-      subscribers.forEach((subscriber) => {
-        if (subscriber && subscriber !== "Unknown Subscriber") {
-          const option = new Option(
-            subscriber.length > 25
-              ? subscriber.substring(0, 25) + "..."
-              : subscriber,
-            subscriber
-          );
-          subscriberFilter.appendChild(option);
-        }
-      });
+                subscriberFilter.appendChild(option);
+            }
+        });
+
+        console.log("--- Finished Dropdown Population ---");
     }
-
     // Individual chart update methods
     updateUsageTrendsChart() {
       if (!this.dashboardData) return;
@@ -1235,58 +1178,98 @@
       this.hideLoading();
     }
 
+  // In dashboard.html
+
     updateTopProductsChart() {
       if (!this.dashboardData) return;
       this.showLoading();
       const selectedProduct =
         document.getElementById("topProductsFilter").value;
-      let filteredData = this.dashboardData.top_products;
+
+      // Use the complete list for filtering, but fall back to top_products for the "All" view.
+      let dataToFilter = this.dashboardData.all_products_by_frequency || [];
+      let dataForChart;
 
       if (selectedProduct !== "all") {
-        filteredData = filteredData.filter(
+        // When filtering for a specific product, search the complete list
+        dataForChart = dataToFilter.filter(
           (item) => item.ProductName === selectedProduct
         );
+      } else {
+        // When showing "All", use the top_products list to keep the chart clean
+        dataForChart = this.dashboardData.top_products;
       }
 
-      this.createTopProductsChart(filteredData);
+      this.createTopProductsChart(dataForChart);
       this.hideLoading();
     }
 
+  // In dashboard.html
+
+  // In dashboard.html
     updateTopSubscribersChart() {
-      if (!this.dashboardData) return;
+      console.log("--- Debugging Top Subscribers Chart ---"); // DEBUGGING START
+
+      if (!this.dashboardData) {
+        console.error("Dashboard data is not available. Aborting.");
+        return;
+      }
       this.showLoading();
       const selectedSubscriber = document.getElementById(
         "topSubscribersFilter"
       ).value;
-      let filteredData = this.dashboardData.top_subscribers;
+      
+      console.log("1. Subscriber selected from dropdown:", selectedSubscriber); // DEBUGGING STEP 1
 
-      if (selectedSubscriber !== "all") {
-        filteredData = filteredData.filter(
-          (item) => item.SubscriberName === selectedSubscriber
-        );
+      // CORRECTED: Use the complete list for filtering, but fall back to the top_subscribers list for the "All" view.
+      let dataToFilter = this.dashboardData.all_subscribers_by_usage;
+      let dataForChart;
+
+      console.log("2. Checking for the complete list 'all_subscribers_by_usage':", dataToFilter); // DEBUGGING STEP 2
+
+      if (!dataToFilter || !Array.isArray(dataToFilter)) {
+          console.error("Error: The complete list 'all_subscribers_by_usage' is missing or not an array. Using empty list.");
+          dataToFilter = [];
       }
 
-      this.createTopSubscribersChart(filteredData);
+      if (selectedSubscriber !== "all") {
+        // When filtering for a specific subscriber, search the complete list
+        console.log("3. Filtering the complete list for the selected subscriber..."); // DEBUGGING STEP 3
+        dataForChart = dataToFilter.filter(
+          (item) => item.SubscriberName === selectedSubscriber
+        );
+      } else {
+        // When showing "All", use the top_subscribers list to keep the chart clean
+        console.log("3. 'All' is selected. Using the top_subscribers list for the chart."); // DEBUGGING STEP 3
+        dataForChart = this.dashboardData.top_subscribers;
+      }
+
+      console.log("4. Final data being sent to the chart:", dataForChart); // DEBUGGING STEP 4
+      if (selectedSubscriber !== "all" && dataForChart.length === 0) {
+          console.warn("Warning: Filtering resulted in an empty list. The selected subscriber was not found in the complete list.");
+      }
+
+      this.createTopSubscribersChart(dataForChart);
       this.hideLoading();
-    }
+      console.log("--- End of Debugging ---"); // DEBUGGING END
 
-    // updateRevenueChart() {
-    //   if (!this.dashboardData) return;
-    //   this.showLoading();
-    //   const selectedProduct = document.getElementById(
-    //     "revenueProductFilter"
-    //   ).value;
-    //   let filteredData = this.dashboardData.revenue_data;
+    }            // updateRevenueChart() {
+            //   if (!this.dashboardData) return;
+            //   this.showLoading();
+            //   const selectedProduct = document.getElementById(
+            //     "revenueProductFilter"
+            //   ).value;
+            //   let filteredData = this.dashboardData.revenue_data;
 
-    //   if (selectedProduct !== "all") {
-    //     filteredData = filteredData.filter(
-    //       (item) => item.product === selectedProduct
-    //     );
-    //   }
+            //   if (selectedProduct !== "all") {
+            //     filteredData = filteredData.filter(
+            //       (item) => item.product === selectedProduct
+            //     );
+            //   }
 
-    //   this.createRevenueChart(filteredData);
-    //   this.hideLoading();
-    // }
+            //   this.createRevenueChart(filteredData);
+            //   this.hideLoading();
+            // }
 
     updateNewSubscribersChart() {
       if (!this.dashboardData) return;
@@ -1369,6 +1352,68 @@
         });
     }
 
+    // downloadTopSubscribers() {
+    //   if (!this.isDataLoaded) {
+    //     alert("Please load the dashboard data first before downloading.");
+    //     return;
+    //   }
+
+    //   const startDate = document.getElementById("startDate").value;
+    //   const endDate = document.getElementById("endDate").value;
+    //   const subscriberFilter = this.appliedSubscriberFilter || "all";
+
+    //   const params = new URLSearchParams({
+    //     start_date: startDate,
+    //     end_date: endDate,
+    //     subscriber_filter: subscriberFilter,
+    //   });
+
+    //   const downloadUrl = `/download-top-subscribers-csv/?${params.toString()}`;
+
+    //   // Create a temporary link to trigger the download
+    //   const link = document.createElement("a");
+    //   link.href = downloadUrl;
+    //   document.body.appendChild(link);
+    //   link.click();
+    //   document.body.removeChild(link);
+    // }
+
+    // In dashboard.html, replace the entire downloadTopSubscribers function.
+
+    downloadTopSubscribers() {
+      if (!this.isDataLoaded) {
+        alert("Please load the dashboard data first before downloading.");
+        return;
+      }
+
+      const startDate = document.getElementById("startDate").value;
+      const endDate = document.getElementById("endDate").value;
+      const globalFilter = this.appliedSubscriberFilter || "all";
+      
+      // Get the value from the chart's specific dropdown
+      const selectedSubscriber = document.getElementById("topSubscribersFilter").value;
+
+      const params = new URLSearchParams({
+        start_date: startDate,
+        end_date: endDate,
+        subscriber_filter: globalFilter,
+      });
+
+      // Add the specific subscriber to the request ONLY if one is selected
+      if (selectedSubscriber && selectedSubscriber !== 'all') {
+        params.append('selected_subscriber', selectedSubscriber);
+      }
+
+      const downloadUrl = `/download-top-subscribers-csv/?${params.toString()}`;
+
+      // Create a temporary link to trigger the download
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
     downloadChurnedSubscribers() {
       // Get churn analysis date range values
       const startDate = document.getElementById("churnStartDate").value;
@@ -1438,6 +1483,124 @@
       document.body.removeChild(link);
     }
 
+    downloadUsageTrends() {
+      const filterValue = document.getElementById("usageTrendsTimeFilter").value;
+      
+      let startDate, endDate;
+      
+      if (filterValue === "custom") {
+        // Get custom date range values
+        startDate = document.getElementById("usageTrendsStartDate").value;
+        endDate = document.getElementById("usageTrendsEndDate").value;
+        
+        if (!startDate || !endDate) {
+          alert("Please select both start and end dates before downloading.");
+          return;
+        }
+      } else {
+        // Calculate date range based on selected days
+        const days = parseInt(filterValue);
+        const today = new Date();
+        const startDateObj = new Date(today);
+        startDateObj.setDate(today.getDate() - days);
+        
+        endDate = today.toISOString().split('T')[0];
+        startDate = startDateObj.toISOString().split('T')[0];
+      }
+      
+      // Use the applied subscriber filter for download (not the current dropdown value)
+      const subscriberFilter = this.appliedSubscriberFilter || "all";
+      
+      // Debug: Log the subscriber filter value
+      console.log('Download - Applied subscriber filter value:', subscriberFilter);
+      console.log('Download - Current dropdown value:', document.getElementById("globalSubscriberFilter")?.value);
+      console.log('Download - globalSubscriberFilter element:', document.getElementById("globalSubscriberFilter"));
+      
+      // Build query parameters
+      const params = new URLSearchParams();
+      params.append("start_date", startDate);
+      params.append("end_date", endDate);
+      
+      // Add subscriber filter if not 'all'
+      if (subscriberFilter !== "all") {
+        params.append("subscriber_filter", subscriberFilter);
+      }
+      
+      // Debug: Log the final URL
+      console.log('Download - API URL:', `/api/usage-trends/?${params.toString()}`);
+      
+      fetch(`/api/usage-trends/?${params.toString()}`, {
+        credentials: 'same-origin'
+      })
+        .then(response => response.json())
+        .then(data => {
+          this.downloadUsageTrendsCSV(data.usage_trends, startDate, endDate);
+        })
+        .catch(error => {
+          console.error('Error fetching usage trends data:', error);
+          alert('Error fetching data for download. Please try again.');
+        });
+    }
+
+    downloadUsageTrendsCSV(usageData, startDate, endDate) {
+      // Use the applied subscriber filter (not the current dropdown value)
+      const subscriberFilter = this.appliedSubscriberFilter || "all";
+      
+      // Debug: Check subscriber filter value and data
+      console.log('CSV - Subscriber filter value:', subscriberFilter);
+      console.log('CSV - Download data:', usageData);
+      console.log('CSV - Data length:', usageData ? usageData.length : 0);
+      console.log('CSV - Sample data item:', usageData && usageData.length > 0 ? usageData[0] : 'No data');
+      
+      if (!usageData || usageData.length === 0) {
+        alert('No usage trends data available for download. Please load the dashboard first.');
+        return;
+      }
+      
+      // Create TSV content (tab-separated) - removed Time Period column
+      let tsvContent = "Date\tUsage Count";
+      
+      // Add subscriber column if filtered
+      if (subscriberFilter !== "all") {
+        tsvContent += "\tSubscriber Name";
+      }
+      
+      tsvContent += "\n";
+      
+      // Add data rows
+      usageData.forEach(item => {
+        const date = new Date(item.date).toLocaleDateString();
+        let row = `${date}\t${item.count}`;
+        
+        if (subscriberFilter !== "all") {
+          row += `\t${subscriberFilter}`;
+        }
+        
+        tsvContent += row + "\n";
+      });
+      
+      // Create and download file
+      const blob = new Blob([tsvContent], { type: "text/tab-separated-values;charset=utf-8;" });
+      const link = document.createElement("a");
+      
+      // Generate filename with subscriber name included
+      let filename;
+      if (subscriberFilter !== "all") {
+        const cleanSubscriberName = subscriberFilter.replace(/[^a-zA-Z0-9\s]/g, '_').replace(/\s+/g, '_');
+        filename = `usage_trends_${cleanSubscriberName}_${startDate}_to_${endDate}.tsv`;
+      } else {
+        filename = `usage_trends_all_subscribers_${startDate}_to_${endDate}.tsv`;
+      }
+      
+      console.log('Generated filename:', filename);
+      
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
     applyNewSubscribersDateRange() {
       const startDate = document.getElementById("newSubscribersStartDate").value;
       const endDate = document.getElementById("newSubscribersEndDate").value;
@@ -1455,7 +1618,20 @@
       this.showLoading();
       
       // Fetch new subscribers data for custom date range
-      fetch(`/api/new-subscribers-trend/?start_date=${startDate}&end_date=${endDate}`, {
+      // Use the applied subscriber filter (not the current dropdown value)
+      const subscriberFilter = this.appliedSubscriberFilter || "all";
+      
+      // Build query parameters
+      const params = new URLSearchParams();
+      params.append("start_date", startDate);
+      params.append("end_date", endDate);
+      
+      // Add subscriber filter if not 'all'
+      if (subscriberFilter !== "all") {
+        params.append("subscriber_filter", subscriberFilter);
+      }
+      
+      fetch(`/api/new-subscribers-trend/?${params.toString()}`, {
         credentials: 'same-origin'
       })
         .then(response => {
@@ -1522,7 +1698,20 @@
       this.showLoading();
       
       // Fetch usage trends data for custom date range
-      fetch(`/api/usage-trends/?start_date=${startDate}&end_date=${endDate}`, {
+      // Use the applied subscriber filter (not the current dropdown value)
+      const subscriberFilter = this.appliedSubscriberFilter || "all";
+      
+      // Build query parameters
+      const params = new URLSearchParams();
+      params.append("start_date", startDate);
+      params.append("end_date", endDate);
+      
+      // Add subscriber filter if not 'all'
+      if (subscriberFilter !== "all") {
+        params.append("subscriber_filter", subscriberFilter);
+      }
+      
+      fetch(`/api/usage-trends/?${params.toString()}`, {
         credentials: 'same-origin'
       })
         .then(response => {
@@ -1600,9 +1789,9 @@
       }
 
       // Create churn trend chart if trend data is available
-      if (churnData.trend_data && churnData.trend_data.length > 0) {
-        this.createChurnTrendChart(churnData.trend_data);
-      }
+      // if (churnData.trend_data && churnData.trend_data.length > 0) {
+      //   this.createChurnTrendChart(churnData.trend_data);
+      // }
     }
 
     validateChurnDateRange() {
@@ -1627,7 +1816,7 @@
       }
     }
 
-    populateGlobalFilters(data) {
+populateGlobalFilters(data) {
       // Populate global subscriber filter
       const globalSubscriberFilter = document.getElementById(
         "globalSubscriberFilter"
@@ -1637,7 +1826,7 @@
       const currentSelection = globalSubscriberFilter.value;
 
       globalSubscriberFilter.innerHTML =
-        '<option value="all">All Subscribers</option>';
+        '<option value="all">All Subscribers</option>' + '<option value="key_subscribers">Key Subscribers</option>'
 
       // Use unique_subscribers when available, fallback to top_subscribers for subscriber filtering
       let allSubscribers = [];
@@ -1671,10 +1860,31 @@
         if (optionExists) {
           globalSubscriberFilter.value = currentSelection;
           // Update placeholder to show selected subscriber
-          this.updateSubscriberFilterPlaceholder(currentSelection);
+          // this.updateSubscriberFilterPlaceholder(currentSelection);
         }
       }
     }
+
+    // updateSubscriberFilterPlaceholder(selectedValue) {
+    //   const globalSubscriberFilter = document.getElementById(
+    //     "globalSubscriberFilter"
+    //   );
+    //   const allOption = globalSubscriberFilter.querySelector(
+    //     'option[value="all"]'
+    //   );
+
+    //   // Update the "All Subscribers" option text to show selected subscriber
+    //   if (selectedValue && selectedValue !== "all") {
+    //     // Show the selected subscriber name in the placeholder
+    //     const displayName = selectedValue.length > 25 ? selectedValue.substring(0, 25) + "..." : selectedValue;
+    //     allOption.textContent = `Filter: ${displayName}`;
+    //     globalSubscriberFilter.value = selectedValue;
+    //   } else {
+    //     // Reset to default when "all" is selected
+    //     allOption.textContent = "All Subscribers";
+    //     globalSubscriberFilter.value = "all";
+    //   }
+    // }
 
     updateSubscriberFilterPlaceholder(selectedValue) {
       const globalSubscriberFilter = document.getElementById(
@@ -1684,20 +1894,26 @@
         'option[value="all"]'
       );
 
+      // --- CORRECTED LOGIC ---
       if (selectedValue && selectedValue !== "all") {
-        // Find the selected option to get its display text
-        const selectedOption = globalSubscriberFilter.querySelector(
-          `option[value="${selectedValue}"]`
-        );
-        if (selectedOption) {
-          allOption.textContent = selectedOption.textContent;
-        }
+        // Directly use the selected subscriber's name for the placeholder text.
+        // We truncate it to ensure it fits well.
+        const displayText = selectedValue.length > 25 
+                            ? selectedValue.substring(0, 25) + "..." 
+                            : selectedValue;
+        allOption.textContent = displayText;
+
       } else {
+        // If no filter is active, show the default text.
         allOption.textContent = "All Subscribers";
       }
     }
 
     applyGlobalFilters() {
+      // Store the applied subscriber filter for use in downloads
+      const subscriberFilter = document.getElementById("globalSubscriberFilter")?.value || "all";
+      this.appliedSubscriberFilter = subscriberFilter;
+      
       // This function now triggers a new API call with the selected filters.
       // The backend will handle the filtering and caching, ensuring correct data is displayed.
       this.loadData();
@@ -1705,6 +1921,8 @@
 
     resetGlobalFilters() {
       document.getElementById("globalSubscriberFilter").value = "all";
+      // Reset the applied subscriber filter
+      this.appliedSubscriberFilter = "all";
       // Update placeholder to default
       this.updateSubscriberFilterPlaceholder("all");
       

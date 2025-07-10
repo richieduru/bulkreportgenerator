@@ -12,6 +12,8 @@ urlpatterns = [
     path('dashboard-api/', views.dashboard_api, name='dashboard_api'),
     path('download-churned-subscribers/', views.download_churned_subscribers, name='download_churned_subscribers'),
     path('download-new-subscribers/', views.download_new_subscribers, name='download_new_subscribers'),
+    path('download-top-subscribers-csv/', views.download_top_subscribers_csv, name='download_top_subscribers_csv'),
     path('api/new-subscribers-trend/', views.new_subscribers_trend_api, name='new_subscribers_trend_api'),
     path('api/usage-trends/', views.usage_trends_api, name='usage_trends_api'),
 ]
+
