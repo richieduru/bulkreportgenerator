@@ -14,13 +14,15 @@ import io
 import os
 import re
 import zipfile
-from copy import copy
+from copy import copy, deepcopy
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
 from openpyxl.drawing.image import Image
 import os.path
 import uuid
+import tempfile
+import gc
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required,user_passes_test
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
@@ -34,6 +36,91 @@ import csv
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__)
+
+# Global template cache for Excel optimization
+_excel_template_cache = None
+_template_cache_lock = False
+
+def get_cached_excel_template():
+    """Load and cache the Excel template for reuse across reports."""
+    global _excel_template_cache, _template_cache_lock
+    
+    if _excel_template_cache is None and not _template_cache_lock:
+        _template_cache_lock = True
+        try:
+            template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
+            if os.path.exists(template_path):
+                _excel_template_cache = openpyxl.load_workbook(template_path)
+                logger.info("Excel template loaded and cached successfully")
+            else:
+                logger.error(f"Template file not found at {template_path}")
+                raise FileNotFoundError(f"Template file not found at {template_path}")
+        except Exception as e:
+            logger.error(f"Error loading Excel template: {str(e)}")
+            raise
+        finally:
+            _template_cache_lock = False
+    
+    return _excel_template_cache
+
+def create_workbook_from_template():
+    """Create a new workbook instance from the cached template."""
+    template = get_cached_excel_template()
+    if template is None:
+        raise ValueError("Template not available")
+    
+    # Instead of deepcopy, reload the template from file to avoid style corruption
+    template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
+    return openpyxl.load_workbook(template_path)
+
+def write_excel_to_temp_file(workbook, filename):
+    """Write Excel workbook to a temporary file and return the file path."""
+    try:
+        # Create a temporary file
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.xlsx', prefix=f'{filename}_')
+        os.close(temp_fd)  # Close the file descriptor
+        
+        # Save the workbook to the temporary file
+        workbook.save(temp_path)
+        
+        # Clear the workbook from memory
+        workbook.close()
+        del workbook
+        gc.collect()
+        
+        return temp_path
+    except Exception as e:
+        logger.error(f"Error writing Excel file to temp: {str(e)}")
+        raise
+
+def create_merged_cell_map(worksheet):
+    """Create a lookup map for merged cells to optimize cell operations."""
+    merged_map = {}
+    for merged_range in worksheet.merged_cells.ranges:
+        range_str = str(merged_range)
+        for row in range(merged_range.min_row, merged_range.max_row + 1):
+            for col in range(merged_range.min_col, merged_range.max_col + 1):
+                merged_map[(row, col)] = {
+                    'range': range_str,
+                    'is_top_left': (row == merged_range.min_row and col == merged_range.min_col),
+                    'min_row': merged_range.min_row,
+                    'min_col': merged_range.min_col
+                }
+    return merged_map
+
+def optimized_cell_assignment(ws, row, col, value, merged_map=None):
+    """Optimized version of safe_cell_assignment using pre-calculated merged cell map."""
+    if merged_map and (row, col) in merged_map:
+        merge_info = merged_map[(row, col)]
+        if merge_info['is_top_left']:
+            # This is the top-left cell of a merged range, safe to write
+            ws.cell(row=row, column=col).value = value
+        else:
+            # Write to the top-left cell of the merged range instead
+            ws.cell(row=merge_info['min_row'], column=merge_info['min_col']).value = value
+    else:
+        # Not a merged cell, write directly
+        ws.cell(row=row, column=col).value = value
 
 
 # Add this list near the top of your views.py
@@ -232,7 +319,7 @@ def single_report(request):
                 consumer_snap_check=Count(Case(When(ProductName__icontains='Snap Check', then=1))),
                 consumer_basic_trace=Count(Case(When(ProductName__icontains='Basic Trace', then=1))),
                 consumer_basic_credit=Count(Case(When(ProductName__icontains='Basic Credit', then=1))),
-                consumer_detailed_credit=Count(Case(When(ProductName__icontains='Detailed Credit',then=1))),
+                consumer_detailed_credit=Count(Case(When(Q(ProductName__icontains='Consumer Detailed Credit') & ~Q(ProductName__icontains='X-SCore'), then=1))),
                 xscore_consumer_detailed_credit=Count(Case(When(ProductName__icontains='X-SCore Consumer Detailed Credit', then=1))),
                 commercial_basic_trace=Count(Case(When(ProductName__icontains='Commercial Basic Trace', then=1))),
                 commercial_detailed_credit=Count(Case(When(ProductName__icontains='Commercial detailed Credit', then=1))),
@@ -272,15 +359,14 @@ def single_report(request):
             messages.warning(request, f"No data found for subscriber {subscriber_id} between {start_date_display} and {end_date_display}.")
             return render(request, 'bulkrep/single_report.html', context)
 
-        # Generate Excel report
+        # Generate Excel report using optimized template loading
         try:
-            template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
-            buffer = io.BytesIO()
-            wb = openpyxl.load_workbook(template_path)
+            # Use cached template instead of loading from disk each time
+            wb = create_workbook_from_template()
             ws = wb.active
         except Exception as e:
-            logger.error(f"Error loading Excel template: {str(e)}")
-            messages.error(request, f"Error loading Excel template: {str(e)}")
+            logger.error(f"Error creating workbook from template: {str(e)}")
+            messages.error(request, f"Error creating workbook from template: {str(e)}")
             return render(request, 'bulkrep/single_report.html', context)
         try:
             # Look for "Productname" cell to identify where to put the dynamic product name
@@ -596,11 +682,7 @@ def single_report(request):
             # Add 'Generated by: <username>' to the first available merged O-Q row, or row 8 if none, with bold and italic formatting
             add_generated_by(ws, request.user.username, current_row_offset - 1)
 
-            # Save workbook to buffer
-            wb.save(buffer)
-            buffer.seek(0)
-            
-            # Generate filename and create directory if it doesn't exist
+            # OPTIMIZED: Save workbook directly to file instead of using buffer
             month_year = start_date.strftime('%B%Y')
             clean_subscriber = clean_filename(subscriber_id)
             filename = f"{clean_subscriber}_{month_year}_{uuid.uuid4().hex[:8]}.xlsx"
@@ -608,9 +690,12 @@ def single_report(request):
             os.makedirs(single_reports_dir, exist_ok=True)
             file_path = os.path.join(single_reports_dir, filename)
             
-            # Write buffer contents to file using getvalue() to get entire content regardless of position
-            with open(file_path, 'wb') as f:
-                f.write(buffer.getvalue())
+            # Save directly to final location and free memory
+            wb.save(file_path)
+            wb.close()
+            del wb
+            gc.collect()
+            
             download_url = settings.MEDIA_URL + f'reports/single/{filename}'
             
             # Update report generation status to success
@@ -1309,13 +1394,13 @@ def bulk_report(request):
                                     summary_bills['consumer_basic_trace'] += 1
                                 elif 'Basic Credit' in product_name:
                                     summary_bills['consumer_basic_credit'] += 1
-                                elif 'Detailed Credit' in product_name and 'X-SCore' not in product_name:
-                                    summary_bills['consumer_detailed_credit'] += 1
                                 elif 'X-SCore Consumer Detailed Credit' in product_name:
                                     summary_bills['xscore_consumer_detailed_credit'] += 1
+                                elif 'Consumer Detailed Credit' in product_name:
+                                    summary_bills['consumer_detailed_credit'] += 1
                                 elif 'Commercial Basic Trace' in product_name:
                                     summary_bills['commercial_basic_trace'] += 1
-                                elif 'Commercial detailed Credit' in product_name:
+                                elif 'Commercial Detailed Credit' in product_name:
                                     summary_bills['commercial_detailed_credit'] += 1
                                 elif 'Enquiry Report' in product_name:
                                     summary_bills['enquiry_report'] += 1
@@ -1350,15 +1435,14 @@ def bulk_report(request):
                             messages.warning(request, f"No data found for subscriber {subscriber_name} between {start_date_display} and {end_date_display}.")
                             continue
 
-                        # Generate Excel report
+                        # Generate Excel report using optimized template loading
                         try:
-                            template_path = os.path.join(settings.MEDIA_ROOT, 'Templateuse.xlsx')
-                            excel_buffer = io.BytesIO()
-                            wb = openpyxl.load_workbook(template_path)
+                            # Use cached template instead of loading from disk each time
+                            wb = create_workbook_from_template()
                             ws = wb.active
                         except Exception as e:
-                            logger.error(f"Error loading Excel template: {str(e)}")
-                            messages.error(request, f"Error loading Excel template: {str(e)}")
+                            logger.error(f"Error creating workbook from template: {str(e)}")
+                            messages.error(request, f"Error creating workbook from template: {str(e)}")
                             return render(request, 'bulkrep/bulk_report.html', context)
                         try:
                             # Look for "Productname" cell to identify where to put the dynamic product name
@@ -1800,17 +1884,20 @@ def bulk_report(request):
                             messages.error(request, f"Error generating report data: {str(e)}")
                             return render(request, 'bulkrep/bulk_report.html', context)
                         
-                        # Save to buffer
-                        wb.save(excel_buffer)
-                        excel_buffer.seek(0)
-                        
-                        # Prepare filename using the subscriber name
+                        # OPTIMIZED: Write to temp file instead of memory buffer
                         month_year = start_date.strftime('%B%Y')
                         clean_subscriber = clean_filename(subscriber_name)
                         filename = f"{clean_subscriber}_{month_year}.xlsx"
                         
-                        # Add to zip file
-                        zip_file.writestr(filename, excel_buffer.getvalue())
+                        # Write Excel to temporary file and add to zip
+                        temp_excel_path = write_excel_to_temp_file(wb, clean_subscriber)
+                        try:
+                            with open(temp_excel_path, 'rb') as temp_file:
+                                zip_file.writestr(filename, temp_file.read())
+                        finally:
+                            # Clean up temporary file
+                            if os.path.exists(temp_excel_path):
+                                os.unlink(temp_excel_path)
                         
                         # Add to processed subscribers list
                         processed_subscribers.append(subscriber_name)

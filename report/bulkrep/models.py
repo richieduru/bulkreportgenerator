@@ -16,6 +16,7 @@ class SubscriberProductRate(models.Model):
         db_table = 'SubscriberProductRate'
         unique_together = (('subscriber_name', 'product_name'),)
 
+
     def __str__(self):
         return f"{self.subscriber_name} - {self.product_name} - {self.rate}"
 
@@ -35,6 +36,11 @@ class Usagereport(models.Model):
         managed = False  # Tell Django not to manage this table
         db_table = 'usagereport' # Specify the existing table name
         unique_together = (('SubscriberName', 'ProductName', 'SearchIdentity'),)
+
+        indexes = [
+            models.Index(fields=['DetailsViewedDate']),
+            models.Index(fields=['SubscriberName']),
+        ]
     
     def __str__(self):
         return f"{self.SubscriberName} - {self.ProductName} - {self.SearchIdentity}"
