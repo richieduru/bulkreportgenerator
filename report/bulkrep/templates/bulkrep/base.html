@@ -102,6 +102,7 @@
         <div class="collapse navbar-collapse" id="navbarNav">
           <!-- Navigation items - centered with even spacing -->
           <ul class="navbar-nav mx-auto d-flex justify-content-center gap-4">
+            <!-- {% comment %}
             <li class="nav-item">
               <a class="nav-link px-3" href="{% url 'bulkrep:single_report' %}"
                 >Single Report</a
@@ -112,6 +113,7 @@
                 >Bulk Report</a
               >
             </li>
+            {% endcomment %} -->
             {% if user.is_superuser %}
             <li class="nav-item">
               <a class="nav-link px-3" href="{% url 'bulkrep:dashboard' %}"
